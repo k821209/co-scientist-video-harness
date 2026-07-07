@@ -1,22 +1,30 @@
 """Central config: binary paths + per-source-type presets.
 
-Everything is pinned to the isolated `vharness` conda env so the pipeline never
-depends on `conda activate` (which fails on this machine because `deepspeed`
-pre-empts PATH). Override any path via env var.
+Binaries resolve from PATH by default (portable). If your ffmpeg/python live in
+an isolated env that isn't on PATH, point VH_BIN at that env's bin dir (e.g.
+`export VH_BIN=/path/to/conda/envs/myenv/bin`) — every tool is then taken from
+there — or override each one individually (VH_FFMPEG, VH_FFPROBE, ...). Setting
+VH_BIN also avoids depending on `conda activate`.
 """
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 
-VHARNESS_BIN = os.environ.get(
-    "VH_BIN", "/home/k821209/miniforge3/envs/vharness/bin"
-)
+# VH_BIN pins an isolated env's bin dir; unset -> resolve each tool from PATH.
+VHARNESS_BIN = os.environ.get("VH_BIN", "").rstrip("/")
 
-FFMPEG = os.environ.get("VH_FFMPEG", f"{VHARNESS_BIN}/ffmpeg")
-FFPROBE = os.environ.get("VH_FFPROBE", f"{VHARNESS_BIN}/ffprobe")
-PYTHON = os.environ.get("VH_PYTHON", f"{VHARNESS_BIN}/python")
-AUTO_EDITOR = os.environ.get("VH_AUTO_EDITOR", f"{VHARNESS_BIN}/auto-editor")
+def _bin(name: str, env: str) -> str:
+    val = os.environ.get(env)
+    if val:
+        return val
+    return f"{VHARNESS_BIN}/{name}" if VHARNESS_BIN else name
+
+FFMPEG = _bin("ffmpeg", "VH_FFMPEG")
+FFPROBE = _bin("ffprobe", "VH_FFPROBE")
+PYTHON = _bin("python", "VH_PYTHON") if (VHARNESS_BIN or os.environ.get("VH_PYTHON")) else sys.executable
+AUTO_EDITOR = _bin("auto-editor", "VH_AUTO_EDITOR")
 
 # Whisper: CPU int8 by default (GB10 / sm_121 has no CTranslate2 CUDA wheel yet).
 WHISPER_MODEL = os.environ.get("VH_WHISPER_MODEL", "small")
@@ -31,9 +39,7 @@ WHISPER_CPU_THREADS = int(os.environ.get("VH_WHISPER_THREADS", str(min(16, (os.c
 #   "gpu" -> transformers Whisper on the local GPU via GPU_PYTHON (steps/gpu_asr.py).
 #   "cpu" -> in-process faster-whisper int8 (portable but slow here).
 TRANSCRIBE_BACKEND = os.environ.get("VH_ASR_BACKEND", "auto")
-GPU_PYTHON = os.environ.get(
-    "VH_GPU_PYTHON", "/home/k821209/miniforge3/envs/deepspeed/bin/python"
-)
+GPU_PYTHON = os.environ.get("VH_GPU_PYTHON") or sys.executable or "python3"
 
 # Remote render host — OPT-IN, user-provided, never hardcoded. Heavy stages
 # (transcription; later encoding) offload here so the local GPU is left alone.
