@@ -44,7 +44,7 @@ GPU_PYTHON = os.environ.get("VH_GPU_PYTHON") or sys.executable or "python3"
 # Remote render host — OPT-IN, user-provided, never hardcoded. Heavy stages
 # (transcription; later encoding) offload here so the local GPU is left alone.
 # Unset -> everything runs locally.
-#   export VH_RENDER_HOST="user@host"   VH_RENDER_PORT="7777"
+#   export VH_RENDER_HOST="user@host"   VH_RENDER_PORT="<ssh-port>"
 #   export VH_RENDER_PYTHON="/path/to/env/bin/python"   # must have faster-whisper+CUDA
 RENDER_HOST = os.environ.get("VH_RENDER_HOST")            # "" / unset -> local only
 RENDER_PORT = os.environ.get("VH_RENDER_PORT")            # optional ssh port
