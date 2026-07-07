@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-harness"
+version = "0.1.0"
+description = "Headless recording -> publish-ready YouTube long-form / vertical Shorts (ffmpeg + Whisper, no CapCut)"
+requires-python = ">=3.10"
+# faster-whisper drives the CPU transcription backend. The GPU backend shells out
+# to a separate interpreter (transformers/torch on the GB10, or faster-whisper on
+# an x86_64 render host) so it is intentionally NOT a hard dependency here.
+# ffmpeg + ffprobe must be on PATH (or pointed at via VH_FFMPEG / VH_FFPROBE).
+dependencies = [
+    "faster-whisper>=1.0",
+]
+
+[project.optional-dependencies]
+# GPU transcription via transformers Whisper (used on aarch64 where CTranslate2
+# has no CUDA wheel). torch must match the platform/CUDA build.
+gpu = ["transformers>=4.40", "numpy"]
+
+[project.scripts]
+# Console entry point -> `vh run <file> --preset ...`, `vh presets`
+vh = "vh.cli:main"
+
+[tool.setuptools]
+packages = ["vh", "vh.steps"]
