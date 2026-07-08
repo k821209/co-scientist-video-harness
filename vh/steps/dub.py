@@ -113,9 +113,12 @@ def _media_duration(path: str) -> float:
     """Duration (s) from ffprobe format — works for audio-only files too."""
     p = run([config.FFPROBE, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=nw=1:nk=1", str(path)])
+    # run() uses text=True, so stdout is already a str — do NOT .decode() it.
+    # Only ValueError is caught: a type mistake must surface, not silently → 0.0
+    # (that's what made the audio-longer branch dead, re-truncating video).
     try:
-        return float((p.stdout or b"").decode().strip() or 0.0)
-    except (ValueError, AttributeError):
+        return float((p.stdout or "").strip() or 0.0)
+    except ValueError:
         return 0.0
 
 
@@ -142,6 +145,6 @@ def mux_audio(video: str, audio: str, dst: str) -> str:
         run([config.FFMPEG, "-y", "-i", str(video), "-i", str(audio),
              "-map", "0:v", "-map", "1:a",
              "-vf", f"tpad=stop_mode=clone:stop_duration={pad:.3f}",
-             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
-             "-b:a", "192k", "-shortest", str(dst)])
+             *config.video_args(),          # configured encoder (NVENC / VH_VENC)
+             "-c:a", "aac", "-b:a", "192k", "-shortest", str(dst)])
     return dst
