@@ -109,10 +109,39 @@ def caption_words(meta: list[dict], slot_starts: list[float]) -> list[Word]:
     return out
 
 
+def _media_duration(path: str) -> float:
+    """Duration (s) from ffprobe format — works for audio-only files too."""
+    p = run([config.FFPROBE, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", str(path)])
+    try:
+        return float((p.stdout or b"").decode().strip() or 0.0)
+    except (ValueError, AttributeError):
+        return 0.0
+
+
 def mux_audio(video: str, audio: str, dst: str) -> str:
-    """Replace a video's audio with `audio` (copy video, encode aac)."""
+    """Replace a video's audio with `audio`.
+
+    Never silently drops footage: the old `-shortest` cut the video to the audio
+    length, so a video tail past the narration (e.g. a silent end card) vanished
+    with no warning. Now the output length = max(video, audio):
+      - audio shorter → pad it with silence, keep the full video (copy, no
+        re-encode) so the end card survives;
+      - audio longer  → hold the last video frame so no narration is cut.
+    """
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
-    run([config.FFMPEG, "-y", "-i", str(video), "-i", str(audio),
-         "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac",
-         "-b:a", "192k", "-shortest", str(dst)])
+    vdur, adur = _media_duration(video), _media_duration(audio)
+    if adur <= vdur + 0.05:
+        # video is the longer/equal stream — pad audio to it, keep video as-is.
+        run([config.FFMPEG, "-y", "-i", str(video), "-i", str(audio),
+             "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac",
+             "-b:a", "192k", "-af", "apad", "-shortest", str(dst)])
+    else:
+        # audio outlasts video — freeze the last frame so speech isn't clipped.
+        pad = adur - vdur
+        run([config.FFMPEG, "-y", "-i", str(video), "-i", str(audio),
+             "-map", "0:v", "-map", "1:a",
+             "-vf", f"tpad=stop_mode=clone:stop_duration={pad:.3f}",
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+             "-b:a", "192k", "-shortest", str(dst)])
     return dst

@@ -99,29 +99,44 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + "\n".join(events) + "\n"
 
 
+_HOLD_MAX = 1.6   # cap on how long a caption lingers into a pause (seconds)
+
+
 def _caption_events(words: list[Word], max_words: int, style_name: str,
-                    mode: str = "word") -> list[str]:
+                    mode: str = "word", hold_through_pauses: bool = True) -> list[str]:
     """Caption Dialogue lines (word-pop or line), reusable across layouts.
 
     A global `cursor` forces every event to start at/after the previous event's
     end, so overlapping/backwards Whisper word timestamps can never make two
     caption events show at once (which libass would stack into multiple lines
-    that overflow the caption zone)."""
+    that overflow the caption zone).
+
+    hold_through_pauses (default on): extend the last caption of each line to the
+    NEXT line's start (capped at _HOLD_MAX) so a caption stays on screen through
+    inter-sentence silence instead of blinking off. Without it, edge-tts's ~1s
+    sentence gaps left the frame subtitle-less ~20% of the time."""
     events: list[str] = []
     cursor = 0.0
-    for line in _group_lines(words, max_words):
-        if not line:
-            continue
+    lines = [ln for ln in _group_lines(words, max_words) if ln]
+    for li, line in enumerate(lines):
+        next_line_start = lines[li + 1][0].start if li + 1 < len(lines) else None
+        hold_to = (min(next_line_start, line[-1].end + _HOLD_MAX)
+                   if (hold_through_pauses and next_line_start is not None) else None)
         if mode == "line":
             start = max(line[0].start, cursor)
             end = max(line[-1].end, start + 0.3)
+            if hold_to is not None:
+                end = max(end, hold_to)
             cursor = end
             text = _escape(" ".join(w.text for w in line))
             events.append(f"Dialogue: 0,{_ass_ts(start)},{_ass_ts(end)},{style_name},,0,0,0,,{text}")
         else:
             for i, w in enumerate(line):
                 start = max(w.start, cursor)
-                nxt = line[i + 1].start if i + 1 < len(line) else w.end
+                if i + 1 < len(line):
+                    nxt = line[i + 1].start
+                else:
+                    nxt = hold_to if hold_to is not None else w.end   # linger through pause
                 end = max(nxt, start + 0.12)   # strictly after `start`, never overlaps
                 cursor = end
                 parts = []
@@ -146,9 +161,16 @@ def build_boxed_ass(
     style: str = "word",
     max_words: int = 4,
     font: str | None = None,
+    title_end: float | None = None,
+    hold_through_pauses: bool = True,
 ) -> str:
     """ASS for the boxed vertical layout: header in the top band (persistent
-    section title, or a fixed video title), captions in the bottom band."""
+    section title, or a fixed video title), captions in the bottom band.
+
+    title_end: when to end the fixed `video_title` header (and the last
+    chapter). Defaults to `words[-1].end + 3.0` — a 3s tail so the header
+    doesn't vanish the instant narration stops. Pass an explicit value to retire
+    the header earlier (e.g. before an end card)."""
     font = font or config.CAPTION_FONT
     top_band = max(1, video_top)
     bottom_band = max(1, canvas_h - video_bottom)
@@ -176,7 +198,7 @@ Style: Head,{font},{head_fs},{_ACCENT},{_WHITE},{_BLACK},&H00000000,-1,0,0,0,100
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events: list[str] = []
-    end_all = (words[-1].end + 3.0) if words else 3600.0
+    end_all = title_end if title_end is not None else ((words[-1].end + 3.0) if words else 3600.0)
     chs = sorted(chapters or [], key=lambda c: float(c.start))
 
     if chs:   # persistent current-section header
@@ -192,7 +214,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f"Dialogue: 0,{_ass_ts(0.0)},{_ass_ts(end_all)},Head,,0,0,0,,{_escape(video_title)}"
         )
 
-    events += _caption_events(words, max_words, "Cap", mode=style)
+    events += _caption_events(words, max_words, "Cap", mode=style,
+                              hold_through_pauses=hold_through_pauses)
     return header + "\n".join(events) + "\n"
 
 
