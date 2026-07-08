@@ -82,38 +82,53 @@ _REMOTE_ASR_WORKER = r'''
 import sys, json
 wav, out, lang, model = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 lang = None if lang in ("", "auto", "none") else lang
+prompt = ""
+if len(sys.argv) > 5 and sys.argv[5] not in ("", "-"):
+    try: prompt = open(sys.argv[5], encoding="utf-8").read().strip()
+    except Exception: prompt = ""
 from faster_whisper import WhisperModel
 try:
     m = WhisperModel(model, device="cuda", compute_type="float16")
 except Exception:
     m = WhisperModel(model, device="cpu", compute_type="int8")
-segs, info = m.transcribe(wav, language=lang, word_timestamps=True, vad_filter=True)
+# initial_prompt biases decoding toward the known script (fixes homophone/number
+# mis-hears when transcribing our own TTS). hotwords added when supported.
+kw = dict(language=lang, word_timestamps=True, vad_filter=True)
+if prompt: kw["initial_prompt"] = prompt
+try:
+    segs, info = m.transcribe(wav, hotwords=prompt or None, **kw)
+except TypeError:
+    segs, info = m.transcribe(wav, **kw)
 words = [{"start": float(w.start), "end": float(w.end), "text": w.word.strip()}
          for s in segs for w in (s.words or []) if w.word.strip()]
 json.dump(words, open(out, "w"), ensure_ascii=False)
 '''
 
 
-def _transcribe_remote(src: str, language: str | None) -> list[Word]:
+def _transcribe_remote(src: str, language: str | None, prompt: str | None = None) -> list[Word]:
     import os
     from .. import remote
     tag = "vh_" + "".join(c for c in Path(src).stem if c.isalnum())[:24] + f"_{os.getpid()}"
     rtmp = config.RENDER_TMP.rstrip("/")
     rwav, rjson, rwork = f"{rtmp}/{tag}.wav", f"{rtmp}/{tag}.json", f"{rtmp}/{tag}_asr.py"
+    rprompt = "-"
     with tempfile.TemporaryDirectory() as td:
         wav = _extract_wav(src, f"{td}/audio.wav")           # local ffmpeg (light)
         remote.push(wav, rwav)
         remote.push_text(_REMOTE_ASR_WORKER, rwork)
+        if prompt:
+            rprompt = f"{rtmp}/{tag}_prompt.txt"
+            remote.push_text(prompt, rprompt)
         remote.sh(f"{config.RENDER_PYTHON} {rwork} {rwav} {rjson} "
-                  f"{language or 'auto'} {config.WHISPER_MODEL}")
+                  f"{language or 'auto'} {config.WHISPER_MODEL} {rprompt}")
         local_json = f"{td}/words.json"
         remote.pull(rjson, local_json)
         data = json.loads(Path(local_json).read_text(encoding="utf-8"))
-    remote.cleanup(rwav, rjson, rwork)
+    remote.cleanup(rwav, rjson, rwork, *( [rprompt] if prompt else [] ))
     return [Word(**d) for d in data]
 
 
-def transcribe(src: str, language: str | None = None) -> list[Word]:
+def transcribe(src: str, language: str | None = None, prompt: str | None = None) -> list[Word]:
     """Return a flat list of timed words. Backend per config.TRANSCRIBE_BACKEND
     ('auto' -> remote if a render host is configured, else local GPU/CPU)."""
     from .. import remote
@@ -123,7 +138,7 @@ def transcribe(src: str, language: str | None = None) -> list[Word]:
 
     if backend == "remote":
         try:
-            return _transcribe_remote(src, language)
+            return _transcribe_remote(src, language, prompt)
         except Exception as e:
             print(f"[transcribe] remote host failed ({e}); falling back to local")
             backend = "gpu"
