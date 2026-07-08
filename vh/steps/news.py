@@ -20,9 +20,40 @@ Prereq: pip install edge-tts. Requires network (edge-tts calls MS's service).
 from __future__ import annotations
 
 import asyncio
+import difflib
 import subprocess
 
 from .. import config
+from .transcribe import Word
+
+
+def align_to_script(words: list, script: str) -> list:
+    """Correct caption WORDS to the known script while keeping the transcript's
+    timings. Transcribing our own TTS mis-hears numbers/homophones ("정유 4사" ->
+    "정유사사"); a long `initial_prompt` fixes those but can truncate long audio.
+    This instead transcribes cleanly (complete) then aligns tokens to the script
+    (difflib), so every script word is captioned with a sensible time — robust
+    across lengths. Use: align_to_script(transcribe(wav, language='ko'), script)."""
+    S = script.split()
+    wt = [w.text for w in words]
+    out: list[Word] = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, wt, S, autojunk=False).get_opcodes():
+        if tag == "equal":
+            for wi, sj in zip(range(i1, i2), range(j1, j2)):
+                out.append(Word(words[wi].start, words[wi].end, S[sj]))
+            continue
+        sblk = S[j1:j2]
+        if not sblk:
+            continue                                       # deletion -> drop
+        if i2 > i1:
+            t0, t1 = words[i1].start, words[i2 - 1].end
+        else:                                              # insertion -> after prev
+            t0 = out[-1].end if out else 0.0
+            t1 = t0 + 0.4 * len(sblk)
+        step = max(0.08, (t1 - t0) / len(sblk))
+        for k, s in enumerate(sblk):
+            out.append(Word(t0 + k * step, t0 + (k + 1) * step, s))
+    return out
 
 
 async def _stream(text: str, voice: str, out_mp3: str):
