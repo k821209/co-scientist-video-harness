@@ -289,3 +289,174 @@ def build_short(
     got = _dur(out)
     return {"final": out, "duration": got, "vo": d_vo, "words": len(words),
             "sentences": len(shots), "cuts": len(items)}
+
+
+# ── clip-quotation shorts (short YouTube clips + our VO) ──────────────────────
+
+def fetch_clip(url: str, start, dur: float, dst: str, *,
+               keep_audio: bool = False, max_height: int = 1080) -> str:
+    """Partial-download a few seconds of a YouTube video as a VIDEO-ONLY clip
+    (no original audio, so a news/critique quotation doesn't reuse the copyright
+    soundtrack — our VO is added later). Wraps yt-dlp with the right flags:
+    --download-sections, --force-keyframes-at-cuts, -f bv, and --ffmpeg-location
+    (ffmpeg is often not on PATH). `start` = seconds or "MM:SS"; `dur` seconds.
+
+    Source responsibly: safe-tier channels (official label / member official
+    channels), on-screen credit, news/critique purpose (Content-ID risk remains).
+    """
+    import os
+    import pathlib
+
+    def _sec(t) -> float:
+        if isinstance(t, str) and ":" in t:
+            parts = [float(p) for p in t.split(":")]
+            return sum(p * 60 ** i for i, p in enumerate(reversed(parts)))
+        return float(t)
+
+    s = _sec(start)
+    e = s + float(dur)
+    fmt = (f"b[height<=?{max_height}]" if keep_audio
+           else f"bv[height<=?{max_height}]")   # bv = video only → no soundtrack
+    ytdlp = os.environ.get("VH_YTDLP", "yt-dlp")
+    cmd = [ytdlp, "--download-sections", f"*{s:.3f}-{e:.3f}",
+           "--force-keyframes-at-cuts", "-f", fmt, "-o", str(dst), url]
+    ffdir = os.path.dirname(config.FFMPEG)
+    if ffdir:                                    # help yt-dlp find ffmpeg
+        cmd[1:1] = ["--ffmpeg-location", ffdir]
+    pathlib.Path(dst).parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(cmd, check=True)
+    return str(dst)
+
+
+def build_clip_short(
+    script: str,
+    shots: list,           # [(anchor, clip_path, is_vlog, credit), ...]
+    out: str,
+    *,
+    headline: str,
+    eyebrow: str,
+    source: str,
+    badge: str | None = None,          # brief person/info chip (shown on 2nd shot)
+    accent: str = "&H00F5A0FF",        # eyebrow/bar/card colour (ASS BGR)
+    card: str = "AIVO",
+    card_sub: str | None = None,
+    voice: str = "ko-KR-SunHiNeural",
+    workdir: str | None = None,
+    tail: float = 2.8,
+    vlog_crop: float = 0.82,           # keep top 82% of vlog clips (drop burned-in subs)
+    canvas_w: int = 1080,
+    canvas_h: int = 1920,
+    band_h: int = 1056,
+    font: str = "Noto Sans CJK KR",
+) -> dict:
+    """Assemble a clip-quotation Short: several short source clips (already
+    downloaded, e.g. via fetch_clip) reframed to the 9:16 band and trimmed to
+    each sentence's span, over our VO, with a per-clip source credit on screen.
+
+    shots: [(anchor, clip_path, is_vlog, credit)] — one per sentence. `is_vlog`
+    True crops the bottom `1-vlog_crop` (burned-in captions) before reframing.
+    `credit` is the on-screen source (adjacent equal credits are merged).
+    Style margins tuned for 1080×1920. Returns {final, duration, vo, words}.
+    """
+    import json
+    import pathlib
+    from .caption import build_boxed_ass, write_ass, _fg_escape
+    from .transcribe import transcribe
+    from . import dub
+
+    top = (canvas_h - band_h) // 2
+    bottom = top + band_h
+    wd = pathlib.Path(workdir) if workdir else pathlib.Path(__import__("tempfile").mkdtemp(prefix="vh_clip_"))
+    (wd / "bandclips").mkdir(parents=True, exist_ok=True)
+
+    # 1. VO + 2. captions
+    vo = str(wd / "vo.wav")
+    edge_tts_speak(script, vo, voice=voice)
+    d_vo = _dur(vo)
+    total = d_vo + tail
+    words = align_to_script(transcribe(vo, language="ko"), script)
+    if not words:
+        raise ValueError("no aligned words — VO transcription failed")
+
+    # 3. sentence spans via robust anchors
+    anchored, pos = [], 0
+    for anchor, clip, _v, _c in shots:
+        j = _find_anchor(words, anchor, pos)
+        anchored.append((words[j].start, clip))
+        pos = j + 1
+    anchored[0] = (0.0, anchored[0][1])
+    starts = [t for t, _ in anchored] + [total]
+    spans = [round(starts[i + 1] - starts[i], 3) for i in range(len(shots))]
+
+    # 4. reframe each clip to the band, trimmed to its span, then concat
+    va = config.video_args()
+    lines = []
+    for i, (anchor, clip, is_vlog, cred) in enumerate(shots):
+        dst = str(wd / "bandclips" / f"{i:02d}.mp4")
+        pre = f"crop=iw:ih*{vlog_crop}:0:0," if is_vlog else ""
+        vf = (f"{pre}scale={canvas_w}:{band_h}:force_original_aspect_ratio=increase,"
+              f"crop={canvas_w}:{band_h},fps=30,"
+              f"tpad=stop_mode=clone:stop_duration=4,setsar=1,format=yuv420p")
+        subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", "-i", str(clip),
+                        "-vf", vf, "-t", f"{spans[i]:.3f}", *va, "-an", dst], check=True)
+        lines.append(f"file '{dst}'")
+    concat_list = str(wd / "concat.txt")
+    pathlib.Path(concat_list).write_text("\n".join(lines) + "\n")
+    band = str(wd / "band.mp4")
+    subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
+                    "-i", concat_list, "-c", "copy", band], check=True)
+
+    # 5. ASS: headline + captions, then overlays (eyebrow / bar / source / per-clip credit / badge / card)
+    ass = build_boxed_ass(words, canvas_w, canvas_h, top, bottom, video_title=headline,
+                          style="word", max_words=4, title_end=d_vo + 0.30,
+                          hold_through_pauses=True)
+    F = font
+    styles = [
+        f"Style: Eyebrow,{F},34,{accent},&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,4,0,1,3,0,8,60,60,96,1",
+        f"Style: Bar,{F},34,{accent},&H00FFFFFF,{accent},&H00000000,0,0,0,0,100,100,0,0,1,0,0,8,0,0,0,1",
+        f"Style: Src,{F},27,&H00C8C8C8,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,3,0,2,50,50,56,1",
+        f"Style: Cred,{F},26,&H00FFFFFF,&H00FFFFFF,&H00000000,&H78000000,-1,0,0,0,100,100,0,0,3,8,0,9,24,24,452,1",
+        f"Style: Badge,{F},40,{accent},&H00FFFFFF,&H00202020,&H64000000,-1,0,0,0,100,100,2,0,1,4,3,5,0,0,0,1",
+        f"Style: Card,{F},104,{accent},&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,12,0,1,0,0,5,0,0,0,1",
+        f"Style: CardSub,{F},36,&H00C8C8C8,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,6,0,1,0,0,5,0,0,0,1",
+    ]
+    ass = ass.replace("\n\n[Events]", "\n" + "\n".join(styles) + "\n\n[Events]")
+
+    off = d_vo + 0.30
+    card_in = d_vo + 0.55
+    events = [
+        f"Dialogue: 0,{_ts(0.0)},{_ts(off)},Bar,,0,0,0,,{{\\an7\\pos(480,150)\\p1}}m 0 0 l 120 0 l 120 5 l 0 5{{\\p0}}",
+        f"Dialogue: 0,{_ts(0.0)},{_ts(off)},Eyebrow,,0,0,0,,{eyebrow}",
+        f"Dialogue: 0,{_ts(0.0)},{_ts(total)},Src,,0,0,0,,{source}",
+    ]
+    if badge and len(starts) > 2:
+        bs = starts[1]
+        be = min(starts[2], bs + 3.2)
+        events.append(f"Dialogue: 0,{_ts(bs)},{_ts(be)},Badge,,0,0,0,,{{\\an5\\pos(540,1360)\\fad(250,250)}}{badge}")
+    events.append(f"Dialogue: 0,{_ts(card_in)},{_ts(total)},Card,,0,0,0,,{{\\an5\\pos(540,930)\\fad(350,0)}}{card}")
+    if card_sub:
+        events.append(f"Dialogue: 0,{_ts(card_in + 0.15)},{_ts(total)},CardSub,,0,0,0,,{{\\an5\\pos(540,1020)\\fad(400,0)}}{card_sub}")
+    # per-clip source credit (top-right), merging adjacent equal credits
+    i = 0
+    while i < len(shots):
+        j = i
+        while j + 1 < len(shots) and shots[j + 1][3] == shots[i][3]:
+            j += 1
+        seg_start = 0.0 if i == 0 else starts[i]
+        seg_end = starts[j + 1] if j + 1 < len(starts) else total
+        events.append(f"Dialogue: 0,{_ts(seg_start)},{_ts(min(seg_end, off))},Cred,,0,0,0,,{shots[i][3]}")
+        i = j + 1
+    ass_path = write_ass(ass.rstrip("\n") + "\n" + "\n".join(events) + "\n", str(wd / "short.ass"))
+
+    # 6. compose 9:16 + 7. mux
+    composed = str(wd / "composed.mp4")
+    vf = (f"pad={canvas_w}:{canvas_h}:0:{top}:color=0x0B0B14,"
+          f"fade=t=out:st={d_vo + 0.10:.2f}:d=1.10:color=0x0B0B14,"
+          f"subtitles='{_fg_escape(ass_path)}':fontsdir='{_fg_escape(config.CAPTION_FONTSDIR)}',"
+          f"fade=t=out:st={total - 0.45:.2f}:d=0.45")
+    subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", "-i", band,
+                    "-vf", vf, *va, "-an", composed], check=True)
+    pathlib.Path(out).parent.mkdir(parents=True, exist_ok=True)
+    dub.mux_audio(composed, vo, out)
+    return {"final": out, "duration": _dur(out), "vo": d_vo, "words": len(words),
+            "clips": len(shots)}
