@@ -198,7 +198,8 @@ def build_short(
 
     top = (canvas_h - band_h) // 2
     bottom = top + band_h
-    wd = pathlib.Path(workdir) if workdir else pathlib.Path(__import__("tempfile").mkdtemp(prefix="vh_short_"))
+    # resolve to absolute: ffmpeg concat lists + -i paths must not depend on cwd
+    wd = (pathlib.Path(workdir) if workdir else pathlib.Path(__import__("tempfile").mkdtemp(prefix="vh_short_"))).resolve()
     wd.mkdir(parents=True, exist_ok=True)
 
     # 1. voiceover
@@ -366,7 +367,10 @@ def build_clip_short(
 
     top = (canvas_h - band_h) // 2
     bottom = top + band_h
-    wd = pathlib.Path(workdir) if workdir else pathlib.Path(__import__("tempfile").mkdtemp(prefix="vh_clip_"))
+    # resolve to absolute: the concat file lists clip paths, and ffmpeg resolves
+    # each `file` entry relative to the concat file's dir — a relative workdir
+    # would double-prefix (wd/wd/bandclips/..). Absolute paths avoid it.
+    wd = (pathlib.Path(workdir) if workdir else pathlib.Path(__import__("tempfile").mkdtemp(prefix="vh_clip_"))).resolve()
     (wd / "bandclips").mkdir(parents=True, exist_ok=True)
 
     # 1. VO + 2. captions
