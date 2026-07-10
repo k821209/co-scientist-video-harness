@@ -98,7 +98,7 @@ def montage(items: list[tuple], out_mp4: str, workdir: str, w: int = 1080, h: in
     into one video band (no audio). Reuse an image across items for more cuts than
     unique stills — keep repeats >=5 apart."""
     from pathlib import Path
-    work = Path(workdir); work.mkdir(parents=True, exist_ok=True)
+    work = Path(workdir).expanduser(); work.mkdir(parents=True, exist_ok=True)
     clips = []
     for i, (img, dur) in enumerate(items):
         cp = str(work / f"kb{i}.mp4")
@@ -123,6 +123,16 @@ def _dur(path: str) -> float:
 
 def _ts(t: float) -> str:
     return f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{t % 60:05.2f}"
+
+
+def _workdir(workdir: str | None, prefix: str):
+    """Resolve a caller's workdir to an ABSOLUTE, ~-expanded path (or a fresh
+    tempdir). expanduser() so "~/wd" goes to $HOME (not a literal '~' dir under
+    cwd); resolve() so ffmpeg concat lists / -i paths don't depend on cwd."""
+    import pathlib
+    import tempfile
+    p = pathlib.Path(workdir) if workdir else pathlib.Path(tempfile.mkdtemp(prefix=prefix))
+    return p.expanduser().resolve()
 
 
 def _norm(s: str) -> str:
@@ -198,8 +208,7 @@ def build_short(
 
     top = (canvas_h - band_h) // 2
     bottom = top + band_h
-    # resolve to absolute: ffmpeg concat lists + -i paths must not depend on cwd
-    wd = (pathlib.Path(workdir) if workdir else pathlib.Path(__import__("tempfile").mkdtemp(prefix="vh_short_"))).resolve()
+    wd = _workdir(workdir, "vh_short_")
     wd.mkdir(parents=True, exist_ok=True)
 
     # 1. voiceover
@@ -367,10 +376,9 @@ def build_clip_short(
 
     top = (canvas_h - band_h) // 2
     bottom = top + band_h
-    # resolve to absolute: the concat file lists clip paths, and ffmpeg resolves
-    # each `file` entry relative to the concat file's dir — a relative workdir
-    # would double-prefix (wd/wd/bandclips/..). Absolute paths avoid it.
-    wd = (pathlib.Path(workdir) if workdir else pathlib.Path(__import__("tempfile").mkdtemp(prefix="vh_clip_"))).resolve()
+    # absolute + ~-expanded: ffmpeg resolves each concat `file` entry relative to
+    # the concat file's dir, so a relative workdir would double-prefix.
+    wd = _workdir(workdir, "vh_clip_")
     (wd / "bandclips").mkdir(parents=True, exist_ok=True)
 
     # 1. VO + 2. captions
