@@ -336,6 +336,9 @@ def build_short(
     pathlib.Path(out).parent.mkdir(parents=True, exist_ok=True)
     dub.mux_audio(composed, vo, out)
     got = _dur(out)
+    if abs(got - total) > 0.25:      # tail/end-card silently dropped → fail loud
+        raise RuntimeError(f"output {got:.2f}s != expected {total:.2f}s (vo {d_vo:.2f} "
+                           f"+ tail {tail}) — the end card was dropped")
     return {"final": out, "duration": got, "vo": d_vo, "words": len(words),
             "sentences": len(shots), "cuts": len(items)}
 
@@ -446,9 +449,11 @@ def build_clip_short(
     for i, (anchor, clip, is_vlog, cred) in enumerate(shots):
         dst = str(wd / "bandclips" / f"{i:02d}.mp4")
         pre = f"crop=iw:ih*{vlog_crop}:0:0," if is_vlog else ""
+        # hold the last frame for the WHOLE span (a short clip must still fill a
+        # long sentence) — a fixed cap silently left the band short → lost tail.
         vf = (f"{pre}scale={canvas_w}:{band_h}:force_original_aspect_ratio=increase,"
               f"crop={canvas_w}:{band_h},fps=30,"
-              f"tpad=stop_mode=clone:stop_duration=4,setsar=1,format=yuv420p")
+              f"tpad=stop_mode=clone:stop_duration={spans[i]:.3f},setsar=1,format=yuv420p")
         subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", "-i", str(clip),
                         "-vf", vf, "-t", f"{spans[i]:.3f}", *va, "-an", dst], check=True)
         lines.append(f"file '{dst}'")
@@ -478,5 +483,9 @@ def build_clip_short(
                     "-vf", vf, *va, "-an", composed], check=True)
     pathlib.Path(out).parent.mkdir(parents=True, exist_ok=True)
     dub.mux_audio(composed, vo, out)
-    return {"final": out, "duration": _dur(out), "vo": d_vo, "words": len(words),
+    got = _dur(out)
+    if abs(got - total) > 0.25:      # a clip too short for its span → band short → lost tail
+        raise RuntimeError(f"output {got:.2f}s != expected {total:.2f}s (vo {d_vo:.2f} "
+                           f"+ tail {tail}) — a clip couldn't fill its sentence span")
+    return {"final": out, "duration": got, "vo": d_vo, "words": len(words),
             "clips": len(shots)}
