@@ -125,6 +125,61 @@ def _ts(t: float) -> str:
     return f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{t % 60:05.2f}"
 
 
+def _overlay_layer(ass: str, *, font: str, accent: str, eyebrow: str, source: str,
+                   card: str, card_sub: str | None = None, ribbon: str | None = None,
+                   badge: str | None = None, disclosure: str | None = None,
+                   credits: list | None = None, starts: list | None = None,
+                   off: float, total: float, card_in: float) -> str:
+    """Inject the shared news-short overlay (styles + Dialogue events) into a
+    boxed ASS — used by BOTH build_short and build_clip_short so they stay
+    symmetric. Top-right provenance = per-shot merged `credits` when any are
+    given, else the global `ribbon` (a claim like "AI 생성 이미지"); pass neither
+    to assert nothing. `disclosure` = bottom conflict-of-interest footnote;
+    `badge` = an info chip shown during the 2nd shot; `accent` = ASS BGR colour."""
+    F = font
+    src_mv = 92 if disclosure else 56          # lift the source line above a disclosure
+    styles = [
+        f"Style: Eyebrow,{F},34,{accent},&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,4,0,1,3,0,8,60,60,96,1",
+        f"Style: Bar,{F},34,{accent},&H00FFFFFF,{accent},&H00000000,0,0,0,0,100,100,0,0,1,0,0,8,0,0,0,1",
+        f"Style: Src,{F},28,&H00C8C8C8,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,3,0,2,50,50,{src_mv},1",
+        f"Style: Disc,{F},25,&H009090A8,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,3,0,2,50,50,52,1",
+        f"Style: Cred,{F},28,&H00FFFFFF,&H00FFFFFF,&H00000000,&H78000000,-1,0,0,0,100,100,0,0,3,8,0,9,24,24,452,1",
+        f"Style: Badge,{F},40,{accent},&H00FFFFFF,&H00202020,&H64000000,-1,0,0,0,100,100,2,0,1,4,3,5,0,0,0,1",
+        f"Style: Card,{F},104,{accent},&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,12,0,1,0,0,5,0,0,0,1",
+        f"Style: CardSub,{F},36,&H00C8C8C8,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,6,0,1,0,0,5,0,0,0,1",
+    ]
+    ass = ass.replace("\n\n[Events]", "\n" + "\n".join(styles) + "\n\n[Events]")
+    ev = [
+        f"Dialogue: 0,{_ts(0.0)},{_ts(off)},Bar,,0,0,0,,{{\\an7\\pos(480,150)\\p1}}m 0 0 l 120 0 l 120 5 l 0 5{{\\p0}}",
+        f"Dialogue: 0,{_ts(0.0)},{_ts(off)},Eyebrow,,0,0,0,,{eyebrow}",
+        f"Dialogue: 0,{_ts(0.0)},{_ts(total)},Src,,0,0,0,,{source}",
+    ]
+    # provenance top-right: per-shot credits (merge adjacent equal), else ribbon
+    if credits and any(credits) and starts:
+        i = 0
+        while i < len(credits):
+            j = i
+            while j + 1 < len(credits) and credits[j + 1] == credits[i]:
+                j += 1
+            if credits[i]:
+                seg_start = 0.0 if i == 0 else starts[i]
+                seg_end = starts[j + 1] if j + 1 < len(starts) else total
+                ev.append(f"Dialogue: 0,{_ts(seg_start)},{_ts(min(seg_end, off))},Cred,,0,0,0,,{credits[i]}")
+            i = j + 1
+    elif ribbon:
+        ev.append(f"Dialogue: 0,{_ts(0.0)},{_ts(off)},Cred,,0,0,0,,{ribbon}")
+    if disclosure:
+        ev.append(f"Dialogue: 0,{_ts(0.0)},{_ts(total)},Disc,,0,0,0,,{disclosure}")
+    if badge and starts and len(starts) > 2:
+        bs = starts[1]
+        be = min(starts[2], bs + 3.2)
+        ev.append(f"Dialogue: 0,{_ts(bs)},{_ts(be)},Badge,,0,0,0,,{{\\an5\\pos(540,1360)\\fad(250,250)}}{badge}")
+    ev.append(f"Dialogue: 0,{_ts(card_in)},{_ts(total)},Card,,0,0,0,,{{\\an5\\pos(540,930)\\fad(350,0)}}{card}")
+    if card_sub:
+        ev.append(f"Dialogue: 0,{_ts(card_in + 0.15)},{_ts(total)},CardSub,,0,0,0,,{{\\an5\\pos(540,1020)\\fad(400,0)}}{card_sub}")
+    return ass.rstrip("\n") + "\n" + "\n".join(ev) + "\n"
+
+
 def _workdir(workdir: str | None, prefix: str):
     """Resolve a caller's workdir to an ABSOLUTE, ~-expanded path (or a fresh
     tempdir). expanduser() so "~/wd" goes to $HOME (not a literal '~' dir under
@@ -166,16 +221,20 @@ def _find_anchor(words: list, anchor: str, pos: int) -> int:
 
 def build_short(
     script: str,
-    shots: list,           # [(anchor_text, image_path), ...] — one per sentence/clause
+    shots: list,           # [(anchor, image[, credit]), ...] — one per sentence/clause
     out: str,
     *,
     headline: str,
     eyebrow: str,
     source: str,
-    ribbon: str = "AI 생성 이미지",
+    ribbon: str | None = None,         # global provenance ribbon, e.g. "AI 생성 이미지".
+                                       # DEFAULT None — never asserts; the /news-short
+                                       # guardrail requires setting it for AI images.
     card: str = "AIVO",
     card_sub: str | None = None,
     disclosure: str | None = None,     # conflict-of-interest footnote (optional)
+    badge: str | None = None,          # info chip shown during the 2nd shot
+    accent: str = "&H0000E5FF",        # eyebrow/bar/card colour (ASS BGR)
     voice: str = "ko-KR-SunHiNeural",
     workdir: str | None = None,
     tail: float = 2.8,                 # silent end-card seconds after the VO
@@ -222,15 +281,18 @@ def build_short(
     if not words:
         raise ValueError("no aligned words — VO transcription failed")
 
-    # 3. image band — one image per sentence, cut on the sentence boundary
+    # 3. image band — one image per sentence, cut on the sentence boundary.
+    # shots may be (anchor, image) or (anchor, image, credit) for per-photo source.
+    norm = [(s[0], s[1], s[2] if len(s) > 2 else None) for s in shots]
     anchored, pos = [], 0
-    for anchor, img in shots:
+    for anchor, img, _cred in norm:
         j = _find_anchor(words, anchor, pos)
         anchored.append((words[j].start, img))
         pos = j + 1
     anchored[0] = (0.0, anchored[0][1])         # first shot always starts at 0
     starts = [t for t, _ in anchored] + [total]
     imgs = [img for _, img in anchored]
+    credits = [c for _, _, c in norm]
     items = []
     for i, img in enumerate(imgs):
         span = starts[i + 1] - starts[i]
@@ -251,38 +313,15 @@ def build_short(
         shutil.rmtree(wd / "kb")
     montage([(p, d) for p, d, _ in items], band, str(wd / "kb"), w=canvas_w, h=band_h)
 
-    # 4. ASS: boxed headline + captions, then overlay styles/events
+    # 4. ASS: boxed headline + captions + shared overlay layer
     ass = build_boxed_ass(words, canvas_w, canvas_h, top, bottom, video_title=headline,
                           style="word", max_words=4, title_end=d_vo + 0.30,
                           hold_through_pauses=True)
-    F = font
-    styles = [
-        f"Style: Eyebrow,{F},34,&H0000E5FF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,4,0,1,3,0,8,60,60,96,1",
-        f"Style: Bar,{F},34,&H0000E5FF,&H00FFFFFF,&H0000E5FF,&H00000000,0,0,0,0,100,100,0,0,1,0,0,8,0,0,0,1",
-        f"Style: Src,{F},29,&H00C8C8C8,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,3,0,2,50,50,92,1",
-        f"Style: Disc,{F},25,&H009090A8,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,3,0,2,50,50,52,1",
-        f"Style: Ribbon,{F},28,&H00FFFFFF,&H00FFFFFF,&H00000000,&H78000000,-1,0,0,0,100,100,0,0,3,8,0,9,24,24,452,1",
-        f"Style: Card,{F},104,&H0000E5FF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,12,0,1,0,0,5,0,0,0,1",
-        f"Style: CardSub,{F},34,&H00C8C8C8,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,6,0,1,0,0,5,0,0,0,1",
-    ]
-    ass = ass.replace("\n\n[Events]", "\n" + "\n".join(styles) + "\n\n[Events]")
-
-    off = d_vo + 0.30
-    card_in = d_vo + 0.55
-    events = [
-        # accent bar: libass anchors a \p1 drawing's bbox by \an7 top-left, so
-        # draw from (0,0) with non-negative coords (NOT \an5 — that mis-places drawings).
-        f"Dialogue: 0,{_ts(0.0)},{_ts(off)},Bar,,0,0,0,,{{\\an7\\pos(480,150)\\p1}}m 0 0 l 120 0 l 120 5 l 0 5{{\\p0}}",
-        f"Dialogue: 0,{_ts(0.0)},{_ts(off)},Eyebrow,,0,0,0,,{eyebrow}",
-        f"Dialogue: 0,{_ts(0.0)},{_ts(off)},Ribbon,,0,0,0,,{ribbon}",
-        f"Dialogue: 0,{_ts(0.0)},{_ts(total)},Src,,0,0,0,,{source}",
-    ]
-    if disclosure:
-        events.append(f"Dialogue: 0,{_ts(0.0)},{_ts(total)},Disc,,0,0,0,,{disclosure}")
-    events.append(f"Dialogue: 0,{_ts(card_in)},{_ts(total)},Card,,0,0,0,,{{\\an5\\pos(540,930)\\fad(350,0)}}{card}")
-    if card_sub:
-        events.append(f"Dialogue: 0,{_ts(card_in + 0.15)},{_ts(total)},CardSub,,0,0,0,,{{\\an5\\pos(540,1020)\\fad(400,0)}}{card_sub}")
-    ass_path = write_ass(ass.rstrip("\n") + "\n" + "\n".join(events) + "\n", str(wd / "short.ass"))
+    ass = _overlay_layer(ass, font=font, accent=accent, eyebrow=eyebrow, source=source,
+                         card=card, card_sub=card_sub, ribbon=ribbon, badge=badge,
+                         disclosure=disclosure, credits=credits, starts=starts,
+                         off=d_vo + 0.30, total=total, card_in=d_vo + 0.55)
+    ass_path = write_ass(ass, str(wd / "short.ass"))
 
     # 5. compose 9:16 (pad + band fade-out at VO end + burned subs + final fade)
     composed = str(wd / "composed.mp4")
@@ -347,6 +386,7 @@ def build_clip_short(
     eyebrow: str,
     source: str,
     badge: str | None = None,          # brief person/info chip (shown on 2nd shot)
+    disclosure: str | None = None,     # conflict-of-interest footnote (optional)
     accent: str = "&H00F5A0FF",        # eyebrow/bar/card colour (ASS BGR)
     card: str = "AIVO",
     card_sub: str | None = None,
@@ -418,47 +458,15 @@ def build_clip_short(
     subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
                     "-i", concat_list, "-c", "copy", band], check=True)
 
-    # 5. ASS: headline + captions, then overlays (eyebrow / bar / source / per-clip credit / badge / card)
+    # 5. ASS: headline + captions + shared overlay layer (per-clip credits)
     ass = build_boxed_ass(words, canvas_w, canvas_h, top, bottom, video_title=headline,
                           style="word", max_words=4, title_end=d_vo + 0.30,
                           hold_through_pauses=True)
-    F = font
-    styles = [
-        f"Style: Eyebrow,{F},34,{accent},&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,4,0,1,3,0,8,60,60,96,1",
-        f"Style: Bar,{F},34,{accent},&H00FFFFFF,{accent},&H00000000,0,0,0,0,100,100,0,0,1,0,0,8,0,0,0,1",
-        f"Style: Src,{F},27,&H00C8C8C8,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,3,0,2,50,50,56,1",
-        f"Style: Cred,{F},26,&H00FFFFFF,&H00FFFFFF,&H00000000,&H78000000,-1,0,0,0,100,100,0,0,3,8,0,9,24,24,452,1",
-        f"Style: Badge,{F},40,{accent},&H00FFFFFF,&H00202020,&H64000000,-1,0,0,0,100,100,2,0,1,4,3,5,0,0,0,1",
-        f"Style: Card,{F},104,{accent},&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,12,0,1,0,0,5,0,0,0,1",
-        f"Style: CardSub,{F},36,&H00C8C8C8,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,6,0,1,0,0,5,0,0,0,1",
-    ]
-    ass = ass.replace("\n\n[Events]", "\n" + "\n".join(styles) + "\n\n[Events]")
-
-    off = d_vo + 0.30
-    card_in = d_vo + 0.55
-    events = [
-        f"Dialogue: 0,{_ts(0.0)},{_ts(off)},Bar,,0,0,0,,{{\\an7\\pos(480,150)\\p1}}m 0 0 l 120 0 l 120 5 l 0 5{{\\p0}}",
-        f"Dialogue: 0,{_ts(0.0)},{_ts(off)},Eyebrow,,0,0,0,,{eyebrow}",
-        f"Dialogue: 0,{_ts(0.0)},{_ts(total)},Src,,0,0,0,,{source}",
-    ]
-    if badge and len(starts) > 2:
-        bs = starts[1]
-        be = min(starts[2], bs + 3.2)
-        events.append(f"Dialogue: 0,{_ts(bs)},{_ts(be)},Badge,,0,0,0,,{{\\an5\\pos(540,1360)\\fad(250,250)}}{badge}")
-    events.append(f"Dialogue: 0,{_ts(card_in)},{_ts(total)},Card,,0,0,0,,{{\\an5\\pos(540,930)\\fad(350,0)}}{card}")
-    if card_sub:
-        events.append(f"Dialogue: 0,{_ts(card_in + 0.15)},{_ts(total)},CardSub,,0,0,0,,{{\\an5\\pos(540,1020)\\fad(400,0)}}{card_sub}")
-    # per-clip source credit (top-right), merging adjacent equal credits
-    i = 0
-    while i < len(shots):
-        j = i
-        while j + 1 < len(shots) and shots[j + 1][3] == shots[i][3]:
-            j += 1
-        seg_start = 0.0 if i == 0 else starts[i]
-        seg_end = starts[j + 1] if j + 1 < len(starts) else total
-        events.append(f"Dialogue: 0,{_ts(seg_start)},{_ts(min(seg_end, off))},Cred,,0,0,0,,{shots[i][3]}")
-        i = j + 1
-    ass_path = write_ass(ass.rstrip("\n") + "\n" + "\n".join(events) + "\n", str(wd / "short.ass"))
+    ass = _overlay_layer(ass, font=font, accent=accent, eyebrow=eyebrow, source=source,
+                         card=card, card_sub=card_sub, badge=badge, disclosure=disclosure,
+                         credits=[s[3] for s in shots], starts=starts,
+                         off=d_vo + 0.30, total=total, card_in=d_vo + 0.55)
+    ass_path = write_ass(ass, str(wd / "short.ass"))
 
     # 6. compose 9:16 + 7. mux
     composed = str(wd / "composed.mp4")
