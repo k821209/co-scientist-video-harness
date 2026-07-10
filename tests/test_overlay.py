@@ -37,3 +37,20 @@ def test_disclosure_and_badge_optional():
     a = news._overlay_layer(BASE, disclosure="D", badge="B",
                             credits=[None, None, None], starts=[0, 2, 4, 8], **COMMON)
     assert ",Disc,," in a and ",Badge,," in a
+
+
+# ── signature-default locks (the safety fix lives in the DEFAULT, not just the
+#    helper) — a mutation reverting these must turn a test red ────────────────
+import inspect
+
+
+def test_build_short_ribbon_default_is_none():
+    # reverting to "AI 생성 이미지" would silently stamp AI-claims on real photos
+    assert inspect.signature(news.build_short).parameters["ribbon"].default is None
+
+
+def test_twin_parity_params_present():
+    bs = inspect.signature(news.build_short).parameters
+    bc = inspect.signature(news.build_clip_short).parameters
+    assert "badge" in bs and "accent" in bs          # still gained these
+    assert "disclosure" in bc                         # clip gained this
