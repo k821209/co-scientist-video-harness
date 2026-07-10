@@ -1,24 +1,35 @@
-"""Lock the build_clip_short tail fix (9c75854).
-
-The fix is inside the function body (an ffmpeg command + a runtime duration
-guard), so it can't be reached by signature inspection and a full render needs
-ffmpeg + network TTS. Source inspection is the pragmatic ffmpeg-free lock — a
-mutation reverting either half turns one of these red (verified against the
-reporter's mutation A/B).
-"""
+"""Behavior locks for the clip-span tail fix (9c75854), via two named seams so
+we test what the code DOES, not how it's spelled (feedback dae63ba45df2 →
+f9e8f3f47cb5: source-string tests missed a loosened threshold and false-flagged
+an equivalent refactor)."""
 import inspect
+
+import pytest
+
 from vh.steps import news
 
 
-def test_clip_fills_full_span_not_a_fixed_cap():
-    src = inspect.getsource(news.build_clip_short)
-    assert "stop_duration=4," not in src          # the removed hardcoded 4s cap
-    assert "stop_duration={spans[i]" in src       # per-sentence-span hold
+def test_clip_pad_fills_full_span_no_fixed_cap():
+    # a short clip under a long sentence must hold for the WHOLE span
+    assert news._clip_pad(20.0) == pytest.approx(20.0)   # NOT capped at 4
+    assert news._clip_pad(2.0) == pytest.approx(2.0)
 
 
-def test_both_shorts_guard_output_length():
-    # both must fail loud if the end card / tail is silently dropped
+def test_output_guard_raises_on_dropped_tail():
+    with pytest.raises(RuntimeError):
+        news._check_output_duration(20.57, 23.37)        # the real bug's numbers
+    news._check_output_duration(63.50, 63.53)            # within tol → no raise
+
+
+def test_output_guard_threshold_stays_tight():
+    # loosening the tolerance (e.g. to 100) would let a dropped tail through —
+    # this 3s gap must always raise
+    with pytest.raises(RuntimeError):
+        news._check_output_duration(10.0, 13.0)
+
+
+def test_both_shorts_use_the_seams():
+    # a revert to an inline stop_duration=4 / no guard drops these calls
+    assert "_clip_pad(" in inspect.getsource(news.build_clip_short)
     for fn in (news.build_short, news.build_clip_short):
-        src = inspect.getsource(fn)
-        assert "abs(got - total)" in src
-        assert "RuntimeError" in src
+        assert "_check_output_duration(" in inspect.getsource(fn)

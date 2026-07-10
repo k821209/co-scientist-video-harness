@@ -180,6 +180,21 @@ def _overlay_layer(ass: str, *, font: str, accent: str, eyebrow: str, source: st
     return ass.rstrip("\n") + "\n" + "\n".join(ev) + "\n"
 
 
+def _clip_pad(span: float) -> float:
+    """Last-frame hold so a clip fills its WHOLE sentence span — no fixed cap: a
+    short clip under a long sentence must still cover it (a 4 s cap silently left
+    the band short → dropped tail)."""
+    return max(0.0, span)
+
+
+def _check_output_duration(got: float, total: float, tol: float = 0.25) -> None:
+    """Fail loud when the render isn't VO+tail — i.e. the end card / tail was
+    silently dropped. The tolerance is deliberately tight; don't loosen it."""
+    if abs(got - total) > tol:
+        raise RuntimeError(f"output {got:.2f}s != expected {total:.2f}s — the end "
+                           f"card / tail was dropped (a clip couldn't fill its span?)")
+
+
 def _workdir(workdir: str | None, prefix: str):
     """Resolve a caller's workdir to an ABSOLUTE, ~-expanded path (or a fresh
     tempdir). expanduser() so "~/wd" goes to $HOME (not a literal '~' dir under
@@ -336,9 +351,7 @@ def build_short(
     pathlib.Path(out).parent.mkdir(parents=True, exist_ok=True)
     dub.mux_audio(composed, vo, out)
     got = _dur(out)
-    if abs(got - total) > 0.25:      # tail/end-card silently dropped → fail loud
-        raise RuntimeError(f"output {got:.2f}s != expected {total:.2f}s (vo {d_vo:.2f} "
-                           f"+ tail {tail}) — the end card was dropped")
+    _check_output_duration(got, total)
     return {"final": out, "duration": got, "vo": d_vo, "words": len(words),
             "sentences": len(shots), "cuts": len(items)}
 
@@ -453,7 +466,7 @@ def build_clip_short(
         # long sentence) — a fixed cap silently left the band short → lost tail.
         vf = (f"{pre}scale={canvas_w}:{band_h}:force_original_aspect_ratio=increase,"
               f"crop={canvas_w}:{band_h},fps=30,"
-              f"tpad=stop_mode=clone:stop_duration={spans[i]:.3f},setsar=1,format=yuv420p")
+              f"tpad=stop_mode=clone:stop_duration={_clip_pad(spans[i]):.3f},setsar=1,format=yuv420p")
         subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", "-i", str(clip),
                         "-vf", vf, "-t", f"{spans[i]:.3f}", *va, "-an", dst], check=True)
         lines.append(f"file '{dst}'")
@@ -484,8 +497,6 @@ def build_clip_short(
     pathlib.Path(out).parent.mkdir(parents=True, exist_ok=True)
     dub.mux_audio(composed, vo, out)
     got = _dur(out)
-    if abs(got - total) > 0.25:      # a clip too short for its span → band short → lost tail
-        raise RuntimeError(f"output {got:.2f}s != expected {total:.2f}s (vo {d_vo:.2f} "
-                           f"+ tail {tail}) — a clip couldn't fill its sentence span")
+    _check_output_duration(got, total)
     return {"final": out, "duration": got, "vo": d_vo, "words": len(words),
             "clips": len(shots)}
