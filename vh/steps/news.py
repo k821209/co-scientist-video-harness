@@ -251,6 +251,7 @@ def build_short(
     badge: str | None = None,          # info chip shown during the 2nd shot
     accent: str = "&H0000E5FF",        # eyebrow/bar/card colour (ASS BGR)
     voice: str = "ko-KR-SunHiNeural",
+    lang: str = "ko",                  # transcription/alignment language; pair with `voice`
     workdir: str | None = None,
     tail: float = 2.8,                 # silent end-card seconds after the VO
     max_cut: float = 3.6,              # long sentence → split into ≤ this many s
@@ -292,7 +293,7 @@ def build_short(
     total = d_vo + tail
 
     # 2. captions (timing from Whisper, words from the script)
-    words = align_to_script(transcribe(vo, language="ko"), script)
+    words = align_to_script(transcribe(vo, language=lang), script)
     if not words:
         raise ValueError("no aligned words — VO transcription failed")
 
@@ -407,6 +408,7 @@ def build_clip_short(
     card: str = "AIVO",
     card_sub: str | None = None,
     voice: str = "ko-KR-SunHiNeural",
+    lang: str = "ko",                  # transcription/alignment language; pair with `voice`
     workdir: str | None = None,
     tail: float = 2.8,
     vlog_crop: float = 0.82,           # keep top 82% of vlog clips (drop burned-in subs)
@@ -442,7 +444,7 @@ def build_clip_short(
     edge_tts_speak(script, vo, voice=voice)
     d_vo = _dur(vo)
     total = d_vo + tail
-    words = align_to_script(transcribe(vo, language="ko"), script)
+    words = align_to_script(transcribe(vo, language=lang), script)
     if not words:
         raise ValueError("no aligned words — VO transcription failed")
 
