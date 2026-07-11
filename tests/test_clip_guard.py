@@ -33,3 +33,13 @@ def test_both_shorts_use_the_seams():
     assert "_clip_pad(" in inspect.getsource(news.build_clip_short)
     for fn in (news.build_short, news.build_clip_short):
         assert "_check_output_duration(" in inspect.getsource(fn)
+
+
+def test_clip_short_fit_and_fill_options():
+    import inspect
+    p = inspect.signature(news.build_clip_short).parameters
+    assert p["fill"].default == "freeze"                  # backward-compatible default
+    src = inspect.getsource(news.build_clip_short)
+    assert "force_original_aspect_ratio=decrease" in src and "pad=" in src   # fit=letterbox
+    assert "-stream_loop" in src                          # fill="loop"
+    assert "warnings.warn" in src                         # short-clip warning

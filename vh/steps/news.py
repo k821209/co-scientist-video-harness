@@ -412,6 +412,8 @@ def build_clip_short(
     workdir: str | None = None,
     tail: float = 2.8,
     vlog_crop: float = 0.82,           # keep top 82% of vlog clips (drop burned-in subs)
+    fill: str = "freeze",              # how a clip shorter than its span fills it:
+                                       # "freeze" (hold last frame) or "loop" (repeat, keeps motion)
     canvas_w: int = 1080,
     canvas_h: int = 1920,
     band_h: int = 1056,
@@ -421,10 +423,21 @@ def build_clip_short(
     downloaded, e.g. via fetch_clip) reframed to the 9:16 band and trimmed to
     each sentence's span, over our VO, with a per-clip source credit on screen.
 
-    shots: [(anchor, clip_path, is_vlog, credit)] — one per sentence. `is_vlog`
-    True crops the bottom `1-vlog_crop` (burned-in captions) before reframing.
-    `credit` is the on-screen source (adjacent equal credits are merged).
-    Style margins tuned for 1080×1920. Returns {final, duration, vo, words}.
+    shots: [(anchor, clip_path, is_vlog, credit[, opts])] — one per sentence.
+    `is_vlog` True crops the bottom `1-vlog_crop` (burned-in captions) before
+    reframing. `credit` shows on screen (adjacent equal credits merge). Optional
+    5th element `opts` (dict) per shot:
+      - `fit=True`   → letterbox (pad) instead of cover-crop — keeps a WIDE 16:9
+                       source whole (title cards, wide establishing shots), which
+                       the default crop would cut ~44% off the sides of.
+      - `crop=0.78`  → override vlog_crop for this clip (burned-in-sub height
+                       varies by source).
+      - `fill="loop"`→ override the fill mode for this clip.
+    `fill` (freeze|loop) controls how a clip shorter than its span fills it:
+    freeze holds the last frame, loop repeats the source (keeps motion). A clip
+    much shorter than its span warns. NOTE: a **centered** burned-in subtitle
+    can't be cropped away — pick a clean segment instead. Style tuned for
+    1080×1920. Returns {final, duration, vo, words}.
     """
     import json
     import pathlib
@@ -458,18 +471,44 @@ def build_clip_short(
     starts = [t for t, _ in anchored] + [total]
     spans = [round(starts[i + 1] - starts[i], 3) for i in range(len(shots))]
 
-    # 4. reframe each clip to the band, trimmed to its span, then concat
+    # 4. reframe each clip to the band, trimmed to its span, then concat.
+    # A shot may carry per-shot options as a 5th element:
+    #   (anchor, clip, is_vlog, credit, {"fit": bool, "crop": float, "fill": str})
+    #   fit  → letterbox (pad) instead of cover-crop (keep a wide source whole)
+    #   crop → override vlog_crop for this clip (burned-in-sub height varies)
+    #   fill → override the global fill mode for this clip
+    import warnings
     va = config.video_args()
     lines = []
-    for i, (anchor, clip, is_vlog, cred) in enumerate(shots):
+    for i, shot in enumerate(shots):
+        anchor, clip, is_vlog, cred = shot[0], shot[1], shot[2], shot[3]
+        opts = shot[4] if len(shot) > 4 and isinstance(shot[4], dict) else {}
         dst = str(wd / "bandclips" / f"{i:02d}.mp4")
-        pre = f"crop=iw:ih*{vlog_crop}:0:0," if is_vlog else ""
-        # hold the last frame for the WHOLE span (a short clip must still fill a
-        # long sentence) — a fixed cap silently left the band short → lost tail.
-        vf = (f"{pre}scale={canvas_w}:{band_h}:force_original_aspect_ratio=increase,"
-              f"crop={canvas_w}:{band_h},fps=30,"
-              f"tpad=stop_mode=clone:stop_duration={_clip_pad(spans[i]):.3f},setsar=1,format=yuv420p")
-        subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", "-i", str(clip),
+        raw = _dur(clip)
+        if raw < 0.6 * spans[i]:
+            warnings.warn(
+                f"clip {i} ({clip}) is {raw:.1f}s but its span is {spans[i]:.1f}s — "
+                f"it will {opts.get('fill', fill)} to fill; use a longer/continuous "
+                f"segment to avoid a static hold.", stacklevel=2)
+        crop_r = opts.get("crop", vlog_crop) if is_vlog else None
+        pre = f"crop=iw:ih*{crop_r}:0:0," if crop_r else ""
+        if opts.get("fit"):     # letterbox a wide source whole (title cards, wide shots)
+            frame = (f"scale={canvas_w}:{band_h}:force_original_aspect_ratio=decrease,"
+                     f"pad={canvas_w}:{band_h}:(ow-iw)/2:(oh-ih)/2:color=0x0B0B14")
+        else:                   # cover-crop (fills the band; may cut sides)
+            frame = (f"scale={canvas_w}:{band_h}:force_original_aspect_ratio=increase,"
+                     f"crop={canvas_w}:{band_h}")
+        mode = opts.get("fill", fill)
+        if mode == "loop":      # repeat the source to fill the span (keeps motion)
+            vf = f"{pre}{frame},fps=30,setsar=1,format=yuv420p"
+            inp = ["-stream_loop", "-1", "-i", str(clip)]
+        elif mode == "freeze":  # hold the last frame for the WHOLE span (no lost tail)
+            vf = (f"{pre}{frame},fps=30,"
+                  f"tpad=stop_mode=clone:stop_duration={_clip_pad(spans[i]):.3f},setsar=1,format=yuv420p")
+            inp = ["-i", str(clip)]
+        else:
+            raise ValueError(f"fill must be 'freeze' or 'loop', got {mode!r}")
+        subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", *inp,
                         "-vf", vf, "-t", f"{spans[i]:.3f}", *va, "-an", dst], check=True)
         lines.append(f"file '{dst}'")
     concat_list = str(wd / "concat.txt")
