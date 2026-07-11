@@ -187,6 +187,18 @@ def _clip_pad(span: float) -> float:
     return max(0.0, span)
 
 
+def _norm_clip_shots(shots: list) -> list:
+    """Normalize each clip shot to a 5-tuple (anchor, clip, is_vlog, credit, opts)
+    so every loop unpacks the same shape whether or not a per-shot opts dict was
+    given — a mismatched unpack (one loop 4-tuple, another 5-) crashed the
+    fit/crop/fill feature the moment a shot carried opts."""
+    out = []
+    for s in shots:
+        opts = s[4] if len(s) > 4 and isinstance(s[4], dict) else {}
+        out.append((s[0], s[1], s[2], s[3], opts))
+    return out
+
+
 def _check_output_duration(got: float, total: float, tol: float = 0.25) -> None:
     """Fail loud when the render isn't VO+tail — i.e. the end card / tail was
     silently dropped. The tolerance is deliberately tight; don't loosen it."""
@@ -462,8 +474,9 @@ def build_clip_short(
         raise ValueError("no aligned words — VO transcription failed")
 
     # 3. sentence spans via robust anchors
+    shots = _norm_clip_shots(shots)      # every loop below unpacks a 5-tuple
     anchored, pos = [], 0
-    for anchor, clip, _v, _c in shots:
+    for anchor, clip, is_vlog, cred, opts in shots:
         j = _find_anchor(words, anchor, pos)
         anchored.append((words[j].start, clip))
         pos = j + 1
@@ -480,9 +493,7 @@ def build_clip_short(
     import warnings
     va = config.video_args()
     lines = []
-    for i, shot in enumerate(shots):
-        anchor, clip, is_vlog, cred = shot[0], shot[1], shot[2], shot[3]
-        opts = shot[4] if len(shot) > 4 and isinstance(shot[4], dict) else {}
+    for i, (anchor, clip, is_vlog, cred, opts) in enumerate(shots):
         dst = str(wd / "bandclips" / f"{i:02d}.mp4")
         raw = _dur(clip)
         if raw < 0.6 * spans[i]:

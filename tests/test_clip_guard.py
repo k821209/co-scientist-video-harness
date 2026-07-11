@@ -43,3 +43,14 @@ def test_clip_short_fit_and_fill_options():
     assert "force_original_aspect_ratio=decrease" in src and "pad=" in src   # fit=letterbox
     assert "-stream_loop" in src                          # fill="loop"
     assert "warnings.warn" in src                         # short-clip warning
+
+
+def test_norm_clip_shots_unifies_arity():
+    # 4- and 5-element shots both normalize to a 5-tuple that unpacks the same
+    # way in every loop (the regression: one loop unpacked 4, another 5)
+    four = news._norm_clip_shots([("a", "c", False, "Reuters")])
+    five = news._norm_clip_shots([("a", "c", False, "Reuters", {"fit": True})])
+    assert four[0] == ("a", "c", False, "Reuters", {})
+    assert five[0][4] == {"fit": True}
+    for anchor, clip, is_vlog, cred, opts in four + five:   # must not raise
+        assert isinstance(opts, dict)
