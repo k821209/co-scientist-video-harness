@@ -27,7 +27,20 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("presets", help="list available presets")
 
+    g = sub.add_parser("styles", help="build a video-style gallery from a styles/ dir")
+    g.add_argument("styles_dir", help="project styles directory (catalog.json + thumbs/)")
+    g.add_argument("--out", default=None, help="output html (default <styles_dir>/gallery.html)")
+    g.add_argument("--title", default=None)
+    g.add_argument("--no-base", action="store_true", help="project catalog only, skip vh base styles")
+
     args = p.parse_args(argv)
+
+    if args.cmd == "styles":
+        from .style_gallery import build_style_gallery
+        path = build_style_gallery(args.styles_dir, out=args.out, title=args.title,
+                                   include_base=not args.no_base)
+        print(f"[done] {path}")
+        return 0
 
     if args.cmd == "presets":
         for name, pr in PRESETS.items():

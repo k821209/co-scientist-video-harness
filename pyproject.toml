@@ -13,6 +13,11 @@ requires-python = ">=3.10"
 # ffmpeg + ffprobe must be on PATH (or pointed at via VH_FFMPEG / VH_FFPROBE).
 dependencies = [
     "faster-whisper>=1.0",
+    # Core render deps: vh.steps.rank_race (pixel power-diagram solver) and
+    # vh.style_gallery (thumbnail placeholders) need numpy + Pillow at runtime,
+    # so they are hard dependencies (numpy is ALSO in the gpu extra for torch).
+    "numpy",
+    "Pillow",
 ]
 
 [project.optional-dependencies]
@@ -25,4 +30,9 @@ gpu = ["transformers>=4.40", "numpy"]
 vh = "vh.cli:main"
 
 [tool.setuptools]
-packages = ["vh", "vh.steps"]
+packages = ["vh", "vh.steps", "vh.assets"]
+
+# Ship the packaged base style catalog (vh/assets/*.json) inside the wheel —
+# vh.style_gallery loads it via importlib.resources("vh.assets").
+[tool.setuptools.package-data]
+"vh.assets" = ["*.json"]

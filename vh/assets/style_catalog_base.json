@@ -1,0 +1,61 @@
+{
+  "_about": "vh 기본 비디오 스타일 카탈로그 (엔진 레벨, 프로젝트 무관). 프로젝트는 <styles_dir>/catalog.json에서 같은 id로 thumb·examples를 덧붙이거나(augment), 새 스타일을 추가하거나, hide:[id]로 감춘다. vh.style_gallery.build_style_gallery(styles_dir)가 base+프로젝트를 병합.",
+  "updated": "2026-07-14",
+  "styles": [
+    {
+      "id": "rank-race",
+      "title_ko": "순위 레이스",
+      "title_en": "Voronoi Rank Race",
+      "tagline": "면적으로 순위를 보여주는 실시간 랭킹 변동",
+      "description": "화면을 다각형 셀로 쪼개고 셀 면적이 값(점유율·관심도)에 비례하며 시간에 따라 모핑. 셀은 브랜드 컬러(color) 또는 영상(clip)으로 채우고, 1위가 바뀌면 그 대상의 곡을 BGM으로 트는 '리더 추종' 옵션. 흔한 '바 차트 레이스'의 다각형 변형.",
+      "best_for": ["순위·점유율이 시간에 따라 바뀌는 데이터", "아이돌·팀·브랜드 랭킹", "TOP N 트렌드"],
+      "engine": "vh.steps.rank_race.build_rank_race",
+      "aspect": "9:16",
+      "accent": "#48BEFF"
+    },
+    {
+      "id": "clip-deepdive",
+      "title_ko": "클립 인용 딥다이브",
+      "title_en": "Clip-quote Deep-dive",
+      "tagline": "공식 영상 인용 + 그래픽 카드 + 나레이션 설명형",
+      "description": "공식 채널 영상을 컷별로 짧게 인용(16:9는 가로핏+블러 여백)하고 자체 PIL 그래픽 카드와 나레이션으로 한 주제를 12컷 안팎으로 깊이 설명. 컷마다 출처 크레딧. 시리즈·설명 콘텐츠에 최적.",
+      "best_for": ["기술·과학 설명", "산업·정책 브리핑", "시리즈물(딥다이브)"],
+      "engine": "vh.steps.news.build_clip_short",
+      "aspect": "9:16",
+      "accent": "#5AD1A0"
+    },
+    {
+      "id": "stills-news",
+      "title_ko": "스틸 카드 뉴스",
+      "title_en": "Stills Montage News",
+      "tagline": "보도사진·AI 도해 몽타주 + 나레이션 뉴스형",
+      "description": "통신사 보도사진(실존 인물)이나 AI 개념 도해를 켄번즈 몽타주로 엮고 나레이션으로 전달하는 뉴스/과학 포맷. 사진별 크레딧, 실인물은 AI 얼굴 미사용. 속보·인물·논문 소재에 적합.",
+      "best_for": ["스포츠·시사 뉴스", "논문·과학 소개", "인물 보도"],
+      "engine": "vh.steps.news.build_short",
+      "aspect": "9:16",
+      "accent": "#FF7B72"
+    },
+    {
+      "id": "graphic-brief",
+      "title_ko": "그래픽 카드 브리핑",
+      "title_en": "Graphic-card Briefing",
+      "tagline": "직접 렌더한 도표·수치 카드 중심",
+      "description": "PIL로 직접 렌더한 도표·달력·타임라인·아이콘 카드만으로 구성(사진·영상 없음). 수치·구조를 datetime/산술로 검증. 저작권 리스크 0, 날짜·통계·개요 소재에 최적.",
+      "best_for": ["숫자·구조 설명", "개요·목록(TOP N)", "달력·일정", "저작권 민감 주제"],
+      "engine": "render_*.py (PIL) + vh.steps.news.build_short",
+      "aspect": "9:16",
+      "accent": "#48BEFF"
+    },
+    {
+      "id": "clip-quote",
+      "title_ko": "클립 인용 인물·리뷰",
+      "title_en": "Clip Quotation",
+      "tagline": "공식 MV·예고편 짧은 인용 + 나레이션",
+      "description": "공식 MV나 작품 공식 예고편을 몇 초씩 인용(원곡 오디오 미포함, 우리 나레이션만)하고 인물/작품을 소개. 인물 오지정 방지 위해 신원 확실한 컷만 배치. 컷별 공식 채널 크레딧.",
+      "best_for": ["아이돌·인물 특집", "애니·영화·만화 리뷰"],
+      "engine": "vh.steps.news.build_clip_short + fetch_clip",
+      "aspect": "9:16",
+      "accent": "#BC8AFF"
+    }
+  ]
+}
