@@ -214,10 +214,37 @@ def _decode_clip(path, cw, ch, nf, fps, dst_dir):
     return np.stack([np.asarray(Image.open(f).convert("RGB")) for f in fs])
 
 
+def _card_frame(spec: dict, w: int, h: int, accent) -> np.ndarray:
+    """A full-frame intro/outro title card (centred). spec keys:
+    eyebrow, title, subtitle, lines[list], (seconds handled by caller)."""
+    img = Image.new("RGB", (w, h), (14, 17, 25))
+    d = ImageDraw.Draw(img)
+    d.rectangle([5, 5, w - 6, h - 6], outline=accent, width=8)
+    cx = w / 2
+
+    def cc(t, fo, y, fill):
+        if t:
+            d.text((cx, y), t, font=fo, fill=fill, anchor="mm")
+
+    cc(spec.get("eyebrow"), _font(True, 36), h * 0.28, accent)
+    title = spec.get("title", "")
+    fs = 96; fn = _font(True, fs)
+    while fs > 40 and d.textlength(title, font=fn) > w * 0.82:
+        fs -= 4; fn = _font(True, fs)
+    cc(title, fn, h * 0.40, (255, 255, 255))
+    d.line([cx - 130, h * 0.40 + fs * 0.72, cx + 130, h * 0.40 + fs * 0.72], fill=accent, width=6)
+    cc(spec.get("subtitle"), _font(False, 42), h * 0.50, (182, 192, 208))
+    y = h * 0.60
+    for ln in spec.get("lines", []):
+        cc(ln, _font(True, 46), y, (232, 237, 246)); y += h * 0.072
+    return np.asarray(img)
+
+
 # ── public API ───────────────────────────────────────────────────────────────
 def build_rank_race(entries, series, labels, out, *, fill="color",
                     clips=None, audio=None, songs=None, follow_leader=False, crossfade=0.35,
                     headline="", eyebrow="", note="", accent=(255, 205, 60),
+                    intro=None, outro=None,
                     hold_s=3.0, morph_s=0.6, w=1080, h=1920, fps=30,
                     grid=(270, 480), comp=(540, 960), clip_frames=60, workdir=None):
     """Render a weighted-Voronoi rank race.
@@ -231,6 +258,9 @@ def build_rank_race(entries, series, labels, out, *, fill="color",
     audio   : {key: audio_path}                           # tracks for follow_leader BGM
     songs   : {key: song_title}                           # NOW PLAYING caption (defaults to display name)
     follow_leader : play the current #1's audio track, cross-fading on lead change
+    intro / outro : optional {"eyebrow","title","subtitle","lines":[...],"seconds":float}
+        title cards prepended / appended. With follow_leader the intro plays the
+        first leader's track and the outro plays the winner's.
     hold_s / morph_s : seconds each step holds / morphs to the next
     Returns a dict summary.
     """
@@ -273,6 +303,16 @@ def build_rank_race(entries, series, labels, out, *, fill="color",
             return ls, geoms, lay
         return None, None, lay
 
+    def _emit_card(spec, default_s):
+        secs = float(spec.get("seconds", default_s))
+        nfr = max(1, round(secs * fps))
+        buf = np.ascontiguousarray(_card_frame(spec, w, h, accent), dtype=np.uint8).tobytes()
+        for _ in range(nfr):
+            proc.stdin.write(buf)
+        return nfr
+
+    n_intro = _emit_card(intro, 2.5) if intro else 0
+
     blocks = []
     fi = 0
     for j in range(K):
@@ -296,7 +336,13 @@ def build_rank_race(entries, series, labels, out, *, fill="color",
                 proc.stdin.write(np.ascontiguousarray(_composite(vid, lay), dtype=np.uint8).tobytes()); fi += 1
             nblk += MORPH
         blocks.append((leader_kf[j], nblk))
+    n_outro = _emit_card(outro, 3.5) if outro else 0
     proc.stdin.close(); proc.wait()
+    if intro and blocks:
+        blocks[0] = (blocks[0][0], blocks[0][1] + n_intro)   # intro plays first leader's track
+    if outro and blocks:
+        blocks[-1] = (blocks[-1][0], blocks[-1][1] + n_outro)  # outro plays winner's track
+    fi += n_intro + n_outro
 
     # ── leader-following BGM (or single track / silent) ──────────────────────
     final = out

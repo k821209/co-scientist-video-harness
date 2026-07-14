@@ -48,6 +48,28 @@ def test_color_mode_summary_and_leaders(tmp_path, monkeypatch):
     assert res["duration"] == round(8 / 10, 2)
 
 
+def test_intro_outro_prepend_and_append_frames(tmp_path, monkeypatch):
+    """intro/outro title cards add exactly round(seconds*fps) frames each and
+    leave the race itself unchanged (backward-compatible: default None)."""
+    monkeypatch.setattr(config, "video_args",
+                        lambda: ["-c:v", "mpeg4", "-q:v", "5", "-pix_fmt", "yuv420p"])
+    common = dict(
+        entries=[("a", "Alpha", (200, 40, 60)), ("b", "Beta", (40, 120, 220))],
+        series={"a": [3, 1], "b": [1, 3]}, labels=["T1", "T2"],
+        fill="color", hold_s=0.3, morph_s=0.2, fps=10, w=320, h=560, grid=(24, 42),
+    )
+    base = build_rank_race(out=str(tmp_path / "base.mp4"), **common)
+    carded = build_rank_race(
+        out=str(tmp_path / "carded.mp4"),
+        intro={"title": "인트로", "eyebrow": "STYLE", "seconds": 0.5},
+        outro={"title": "우승", "lines": ["감사합니다"], "seconds": 0.4},
+        **common,
+    )
+    assert carded["frames"] == base["frames"] + round(0.5 * 10) + round(0.4 * 10)
+    assert carded["leaders"] == base["leaders"]      # the race is unchanged
+    assert (tmp_path / "carded.mp4").stat().st_size > 0
+
+
 def test_clip_mode_requires_clips(tmp_path):
     with pytest.raises(ValueError, match="clip"):
         build_rank_race(
