@@ -358,7 +358,10 @@ def build_rank_race(entries, series, labels, out, *, fill="color",
         for si, (lk, nb) in enumerate(spans):
             dur = nb / fps; seg = work / f"seg_{si}.m4a"
             fout = max(0.0, dur - crossfade)
-            subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", "-i", str(audio[keys[lk]]),
+            # -stream_loop -1: loop the track so a leader span longer than the
+            # source audio still fills (else -t truncates and -shortest cuts video).
+            subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", "-stream_loop", "-1",
+                            "-i", str(audio[keys[lk]]),
                             "-t", f"{dur:.3f}", "-af",
                             f"afade=t=in:st=0:d={crossfade},afade=t=out:st={fout:.3f}:d={crossfade}",
                             "-ar", "48000", "-ac", "2", str(seg)], check=True)
