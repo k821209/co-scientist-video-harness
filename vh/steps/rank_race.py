@@ -140,7 +140,8 @@ def _compose_clip(lab_small, geoms, frames, fidx, w, h):
 
 # ── overlay (header, date chip, per-cell labels, NOW PLAYING) ────────────────
 def _overlay_layer(lab_grid, shares, entries, date, accent, headline, eyebrow, note,
-                   w, h, band_top, leader_k=None, leader_song=None, gw=270, gh=480):
+                   w, h, band_top, leader_k=None, leader_song=None, gw=270, gh=480,
+                   raw=None, val_fmt=None):
     im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     n = len(entries)
@@ -170,7 +171,8 @@ def _overlay_layer(lab_grid, shares, entries, date, accent, headline, eyebrow, n
             d.text((x, y), t, font=fo, fill=fill)
         cc(f"{rank[k]}위", ft, cy - fs * 0.74, (255, 255, 255))
         cc(name, fn, cy, lc)
-        cc(f"{frac * 100:.0f}%", fp, cy + fs * 0.76, (255, 255, 255))
+        vtxt = val_fmt(raw[k]) if (raw is not None and val_fmt) else f"{frac * 100:.0f}%"
+        cc(vtxt, fp, cy + fs * 0.76, (255, 255, 255))
 
     # header
     d.rectangle([0, 0, w, band_top], fill=(16, 14, 26))
@@ -246,7 +248,8 @@ def build_rank_race(entries, series, labels, out, *, fill="color",
                     headline="", eyebrow="", note="", accent=(255, 205, 60),
                     intro=None, outro=None,
                     hold_s=3.0, morph_s=0.6, w=1080, h=1920, fps=30,
-                    grid=(270, 480), comp=(540, 960), clip_frames=60, workdir=None):
+                    grid=(270, 480), comp=(540, 960), clip_frames=60, workdir=None,
+                    values=None, val_fmt=None):
     """Render a weighted-Voronoi rank race.
 
     entries : [(key, display_name, (r,g,b)), ...]        # order = cell index
@@ -262,6 +265,11 @@ def build_rank_race(entries, series, labels, out, *, fill="color",
         title cards prepended / appended. With follow_leader the intro plays the
         first leader's track and the outro plays the winner's.
     hold_s / morph_s : seconds each step holds / morphs to the next
+    values / val_fmt : optional absolute values per cell shown in the label
+        INSTEAD of the share %. values={key: [v0, v1, ...]} (one per label,
+        same shape as series); val_fmt(v)->str formats it (e.g. view counts:
+        lambda v: f"{v/1e8:.1f}억"). Interpolated during morphs. Omit both to
+        keep the default "NN%" label.
     Returns a dict summary.
     """
     work = pathlib.Path(workdir) if workdir else pathlib.Path(out).with_suffix("")
@@ -273,6 +281,10 @@ def build_rank_race(entries, series, labels, out, *, fill="color",
     shares = np.array([[float(series[k][j]) for k in keys] for j in range(len(labels))], float)
     shares /= shares.sum(axis=1, keepdims=True)
     K = shares.shape[0]
+    # optional raw values per cell/step (e.g. absolute view counts) for label display
+    raw_arr = None
+    if values:
+        raw_arr = np.array([[float(values[k][j]) for k in keys] for j in range(len(labels))], float)
 
     kf, xs, ys = _keyframes(shares, gw, gh)
     leader_kf = [int(np.argmax(shares[j])) for j in range(K)]
@@ -293,11 +305,11 @@ def build_rank_race(entries, series, labels, out, *, fill="color",
                              "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "-",
                              *config.video_args(), str(silent)], stdin=subprocess.PIPE)
 
-    def render(lab_grid, sh, date, lk):
+    def render(lab_grid, sh, date, lk, raw=None):
         lead_song = song_name.get(keys[lk]) if follow_leader else None
         lead = lk if follow_leader else None
         lay = _overlay_layer(lab_grid, sh, entries, date, accent, headline, eyebrow, note,
-                             w, h, band_top, lead, lead_song, gw, gh)
+                             w, h, band_top, lead, lead_song, gw, gh, raw, val_fmt)
         if fill == "clip":
             ls, geoms = _cell_geom(lab_grid, n, cw, ch)
             return ls, geoms, lay
@@ -318,7 +330,8 @@ def build_rank_race(entries, series, labels, out, *, fill="color",
     for j in range(K):
         pA, wA = kf[j]
         labA = _assign(xs, ys, pA, wA)
-        ls, geoms, lay = render(labA, shares[j], labels[j], leader_kf[j])
+        ls, geoms, lay = render(labA, shares[j], labels[j], leader_kf[j],
+                                raw_arr[j] if raw_arr is not None else None)
         for _ in range(HOLD):
             vid = _compose_clip(ls, geoms, frames, fi, w, h) if fill == "clip" else _compose_color(labA, colors, w, h)
             proc.stdin.write(np.ascontiguousarray(_composite(vid, lay), dtype=np.uint8).tobytes()); fi += 1
@@ -329,9 +342,10 @@ def build_rank_race(entries, series, labels, out, *, fill="color",
                 e = ((f + 1) / MORPH); e = e * e * (3 - 2 * e)
                 p = pA * (1 - e) + pB * e; wv = wA * (1 - e) + wB * e
                 sh = shares[j] * (1 - e) + shares[j + 1] * e
+                rw = (raw_arr[j] * (1 - e) + raw_arr[j + 1] * e) if raw_arr is not None else None
                 dt = labels[j] if e < 0.5 else labels[j + 1]
                 lab = _assign(xs, ys, p, wv)
-                ls, geoms, lay = render(lab, sh, dt, leader_kf[j])
+                ls, geoms, lay = render(lab, sh, dt, leader_kf[j], rw)
                 vid = _compose_clip(ls, geoms, frames, fi, w, h) if fill == "clip" else _compose_color(lab, colors, w, h)
                 proc.stdin.write(np.ascontiguousarray(_composite(vid, lay), dtype=np.uint8).tobytes()); fi += 1
             nblk += MORPH

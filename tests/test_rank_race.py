@@ -77,3 +77,21 @@ def test_clip_mode_requires_clips(tmp_path):
             series={"a": [1, 2], "b": [2, 1]}, labels=["T1", "T2"],
             out=str(tmp_path / "x.mp4"), fill="clip",   # no clips= → error
         )
+
+
+def test_values_val_fmt_labels_absolute(tmp_path, monkeypatch):
+    """values + val_fmt draw an absolute value in place of the share %,
+    interpolated during morphs; structure (frames/leaders) is unchanged."""
+    monkeypatch.setattr(config, "video_args",
+                        lambda: ["-c:v", "mpeg4", "-q:v", "5", "-pix_fmt", "yuv420p"])
+    seen = []
+    res = build_rank_race(
+        entries=[("a", "Alpha", (200, 40, 60)), ("b", "Beta", (40, 120, 220))],
+        series={"a": [3, 1], "b": [1, 3]}, labels=["T1", "T2"],
+        out=str(tmp_path / "v.mp4"), fill="color",
+        hold_s=0.3, morph_s=0.2, fps=10, w=320, h=560, grid=(24, 42),
+        values={"a": [300, 100], "b": [100, 300]},
+        val_fmt=lambda v: (seen.append(v), f"{v:.0f}")[1],
+    )
+    assert seen, "val_fmt must be invoked when values is given"
+    assert res["frames"] == 8 and res["leaders"] == ["Alpha", "Beta"]  # structure unchanged
