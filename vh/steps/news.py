@@ -56,21 +56,24 @@ def align_to_script(words: list, script: str) -> list:
     return out
 
 
-async def _stream(text: str, voice: str, out_mp3: str):
+async def _stream(text: str, voice: str, out_mp3: str, rate: str = "+0%"):
     import edge_tts
-    c = edge_tts.Communicate(text, voice)
+    c = edge_tts.Communicate(text, voice, rate=rate)
     with open(out_mp3, "wb") as f:
         async for ch in c.stream():
             if ch["type"] == "audio":
                 f.write(ch["data"])
 
 
-def edge_tts_speak(text: str, out_wav: str, voice: str = "ko-KR-SunHiNeural") -> str:
+def edge_tts_speak(text: str, out_wav: str, voice: str = "ko-KR-SunHiNeural",
+                   rate: str = "+0%") -> str:
     """Synthesize `text` to `out_wav` (48 kHz) with a free edge-tts neural voice.
     Korean voices: ko-KR-SunHiNeural (F), ko-KR-InJoonNeural (M). Pair with
-    transcribe(out_wav, prompt=text) for accurate caption word-timings."""
+    transcribe(out_wav, prompt=text) for accurate caption word-timings.
+    `rate` is edge-tts speed ("+5%" reads a touch brisker — the house default for
+    news/review shorts; "+0%" can drag)."""
     mp3 = out_wav.rsplit(".", 1)[0] + ".mp3"
-    asyncio.run(_stream(text, voice, mp3))
+    asyncio.run(_stream(text, voice, mp3, rate))
     subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", "-i", mp3,
                     "-ar", "48000", out_wav], check=True)
     return out_wav
