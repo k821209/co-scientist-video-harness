@@ -62,3 +62,36 @@ def test_final_encode_rejects_bad_value(tmp_path):
         build_beat_short([("b1", "gfx", "x", "g", 0.0, None, None)],
                          str(tmp_path / "o.mp4"), workdir=str(tmp_path / "wd"),
                          final_encode="nope")
+
+
+def test_seg_fingerprint_uses_content_hash_for_cards(tmp_path):
+    """A card-render script rewrites every png, so mtime must NOT invalidate a
+    segment whose card content is identical (feedback 7b0e9a266d7c item 2)."""
+    import os
+    import time
+    from vh.steps.beats import Beat, _seg_fingerprint
+    card = tmp_path / "g_open.png"; card.write_bytes(b"IDENTICAL-CARD-BYTES")
+    ov = tmp_path / "ov.png"; ov.write_bytes(b"OV")
+    b = Beat.coerce(("b1", "gfx", "본문", "g_open", 0.0, None, None))
+    kw = dict(gfx=tmp_path, clips={}, precrop={}, fps=25, canvas=(1080, 1920),
+              encode_args=["-c:v", "mpeg4"])
+    fp1 = _seg_fingerprint(b, 7.3, ov, **kw)
+    # same bytes, new mtime (script redrew the card unchanged)
+    os.utime(card, (time.time() + 60, time.time() + 60))
+    assert _seg_fingerprint(b, 7.3, ov, **kw) == fp1          # cache survives
+    card.write_bytes(b"REALLY-DIFFERENT-CARD")                 # real edit
+    assert _seg_fingerprint(b, 7.3, ov, **kw) != fp1
+
+
+def test_seg_fingerprint_tracks_vo_content(tmp_path):
+    """Re-recorded narration of the SAME length still invalidates the segment."""
+    from vh.steps.beats import Beat, _seg_fingerprint
+    card = tmp_path / "g.png"; card.write_bytes(b"C")
+    ov = tmp_path / "ov.png"; ov.write_bytes(b"OV")
+    vo = tmp_path / "b1.mp3"; vo.write_bytes(b"OLD-AUDIO")
+    b = Beat.coerce(("b1", "gfx", "본문", "g", 0.0, None, None))
+    kw = dict(gfx=tmp_path, clips={}, precrop={}, fps=25, canvas=(1080, 1920),
+              encode_args=["-c:v", "mpeg4"])
+    fp1 = _seg_fingerprint(b, 7.3, ov, vo_path=vo, **kw)
+    vo.write_bytes(b"NEW-AUDIO")                              # same byte-length
+    assert _seg_fingerprint(b, 7.3, ov, vo_path=vo, **kw) != fp1

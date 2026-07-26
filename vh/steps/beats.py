@@ -87,32 +87,50 @@ def _run(args):
     subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", *args], check=True)
 
 
-def _file_sig(path) -> str:
-    """A file's identity for caching: name + size + mtime. Cheap and enough to
-    notice a re-exported card or a swapped clip."""
+_HASH_MAX_BYTES = 8 * 1024 * 1024      # hash anything up to 8MB (cards, photos, VO)
+
+
+def _file_sig(path, *, prefer_hash: bool = True) -> str:
+    """A file's identity for caching.
+
+    Small files (cards, stills, VO — under _HASH_MAX_BYTES) are identified by
+    CONTENT HASH: a card-render script usually redraws every card, so mtime
+    would invalidate all segments when one card actually changed. Large files
+    (video clips) fall back to size+mtime — hashing them would cost more than
+    the re-encode it saves."""
     try:
         st = os.stat(path)
-        return f"{pathlib.Path(path).name}:{st.st_size}:{int(st.st_mtime)}"
     except OSError:
         return f"{path}:missing"
+    if prefer_hash and st.st_size <= _HASH_MAX_BYTES:
+        try:
+            h = hashlib.sha1(pathlib.Path(path).read_bytes()).hexdigest()
+            return f"{pathlib.Path(path).name}:sha1:{h}"
+        except OSError:
+            pass
+    return f"{pathlib.Path(path).name}:{st.st_size}:{int(st.st_mtime)}"
 
 
 def _seg_fingerprint(b: "Beat", sd: float, ov_path, *, gfx, clips, precrop,
-                     fps: int, canvas, encode_args) -> str:
+                     fps: int, canvas, encode_args, vo_path=None) -> str:
     """Everything that determines a segment's pixels — so an unchanged beat can
     be skipped on a rebuild (reuse_segments). Covers: the beat's timing (sd, from
-    its VO length), the source file (card png / photo / clip, by size+mtime),
-    the clip in-point + precrop, the overlay image content (caption/credit/
-    accent — hashed), and the encode geometry/params."""
+    its VO length), the source file (card png / photo by content hash, clip by
+    size+mtime), the clip in-point + precrop, the overlay image content
+    (caption/credit/accent — hashed), the VO audio content, and the encode
+    geometry/params. Hashing the VO means a re-recorded line of the same length
+    still invalidates the segment (belt-and-braces with the VO cache key)."""
     parts = [b.kind, str(b.visual), f"at={b.at}", f"sd={sd}", f"fps={fps}",
              f"{canvas[0]}x{canvas[1]}", "enc=" + "|".join(map(str, encode_args))]
     if b.kind == "gfx":
         parts.append("src=" + _file_sig(pathlib.Path(gfx) / f"{b.visual}.png"))
     elif b.kind == "photo":
         parts.append("src=" + _file_sig(b.visual))
-    else:  # clip
-        parts.append("src=" + _file_sig(clips.get(b.visual, b.visual)))
+    else:  # clip — big file, stat-based
+        parts.append("src=" + _file_sig(clips.get(b.visual, b.visual), prefer_hash=False))
         parts.append("precrop=" + precrop.get(b.visual, ""))
+    if vo_path is not None:
+        parts.append("vo=" + _file_sig(vo_path))
     try:
         parts.append("ov=" + hashlib.sha1(pathlib.Path(ov_path).read_bytes()).hexdigest())
     except OSError:
@@ -236,11 +254,28 @@ def build_beat_short(
             f"boxblur=22:2,eq=brightness=-0.18")
 
     # 1. voice-over per beat (audio leads)
+    #
+    # The cache key MUST include the script — keying on the file's existence
+    # alone meant a re-written line kept the OLD audio: the card showed the new
+    # wording while the voice read the old sentence, silently, exit 0.
+    vo_cache_path = wd / "vo" / ".vo_cache.json"
+    prev_vo: dict = {}
+    if vo_cache_path.exists():
+        try:
+            prev_vo = json.loads(vo_cache_path.read_text())
+        except Exception:
+            prev_vo = {}
+    new_vo: dict = {}
     for b in beats:
         mp3 = wd / "vo" / f"{b.id}.mp3"
-        if reuse_vo and mp3.exists():
+        key = hashlib.sha1(
+            "\x1e".join([b.text or "", voice, rate]).encode("utf-8")).hexdigest()
+        if reuse_vo and mp3.exists() and prev_vo.get(b.id) == key:
+            new_vo[b.id] = key
             continue
         news.edge_tts_speak(b.text, str(mp3.with_suffix(".wav")), voice=voice, rate=rate)
+        new_vo[b.id] = key
+    vo_cache_path.write_text(json.dumps(new_vo))
 
     # 2. one video segment per beat, sized by its VO
     segs = []
@@ -253,7 +288,8 @@ def build_beat_short(
         seg = wd / f"seg_{b.id}.mp4"
 
         fp = _seg_fingerprint(b, sd, ov, gfx=gfx, clips=clips, precrop=precrop,
-                              fps=fps, canvas=(W, H), encode_args=config.encode_args())
+                              fps=fps, canvas=(W, H), encode_args=config.encode_args(),
+                              vo_path=vo)
         if reuse_segments and seg.exists() and prev_cache.get(b.id) == fp:
             new_cache[b.id] = fp
             reused += 1
