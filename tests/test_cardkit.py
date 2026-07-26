@@ -37,3 +37,41 @@ def test_bar_sits_under_its_box():
     c = Card(h=600)
     box = c.text((540, 200), "PROFILE", Card.fr(34), c.MINT)
     assert c.bar(box) > box[3]
+
+
+# ── metrics-first sizing (feedback 2c3b276c1232) ────────────────────────────
+
+def test_ink_measures_actual_glyph_box():
+    from vh.cardkit import Card
+    c = Card(w=1080, h=600)
+    w1, h1 = c.ink("무게", c.fr(34))
+    w2, h2 = c.ink("무게", c.fr(68))
+    assert w2 > w1 and h2 > h1                      # scales with the font
+    assert c.ink("무게무게무게", c.fr(34))[0] > w1     # scales with the text
+
+
+def test_stack_height_gives_symmetric_inner_margins():
+    """box = pad + ink + gap + ink + pad, so top/bottom padding are equal."""
+    from vh.cardkit import Card
+    c = Card(w=1080, h=600)
+    rows = [("정리", c.fr(34)), ("네이버 14.6조", c.fb(46))]
+    pad, gap = 40, 20
+    h = c.stack_height(rows, pad=pad, gap=gap)
+    inks = [c.ink(t, f)[1] for t, f in rows]
+    assert h == pad * 2 + sum(inks) + gap
+    # the drawn content leaves exactly `pad` above the first row and below the last
+    y0 = 100
+    first_top = y0 + pad
+    last_bottom = y0 + pad + inks[0] + gap + inks[1]
+    assert abs((first_top - y0) - ((y0 + h) - last_bottom)) < 1e-6
+
+
+def test_fit_font_shrinks_to_fit_and_respects_floor():
+    from vh.cardkit import Card
+    c = Card(w=1080, h=600)
+    long = "아주 긴 제목 문구가 한 줄에 다 들어가야 하는 경우"
+    f = c.fit_font(long, 700, 60)
+    assert c.ink(long, f)[0] <= 700 and f.size < 60            # shrank to fit
+    assert c.fit_font(long, 10, 60, floor=24).size == 24        # floor honoured
+    short = c.fit_font("무게", 700, 40)
+    assert short.size == 40                                     # already fits: unchanged

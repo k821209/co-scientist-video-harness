@@ -106,6 +106,43 @@ class Card:
         """Lowest edge of the given text boxes — the anchor for rules/accents."""
         return max(b[3] for b in boxes)
 
+    # ── metrics-first sizing ─────────────────────────────────────────────
+    def ink(self, t: str, font) -> tuple[float, float]:
+        """(width, height) of the glyphs `t` would actually draw in `font`.
+
+        Measure with this instead of guessing — Hangul ink height varies with the
+        size AND the syllables, so a constant row height leaves asymmetric inner
+        margins (and can push the ink past the box edge, i.e. negative padding)."""
+        l, tp, r, b = self.d.textbbox((0, 0), t, font=font)
+        return r - l, b - tp
+
+    def stack_height(self, items, *, pad: int, gap: int) -> float:
+        """Height a panel needs to hold `items` [(text, font), …] stacked, with
+        `pad` above and below and `gap` between rows:
+        pad + ink1 + gap + ink2 + … + pad.
+
+        Derive the BOX from the type, never the other way round — then the inner
+        margins are equal by construction at any text length or font size:
+
+            rows = [(label, c.fr(34)), (value, c.fb(46))]
+            h = c.stack_height(rows, pad=40, gap=20)
+            c.draw.rounded_rectangle([x0, y, x1, y + h], radius=24, fill=...)
+        """
+        heights = [self.ink(t, f)[1] for t, f in items]
+        if not heights:
+            return 2 * pad
+        return 2 * pad + sum(heights) + gap * (len(heights) - 1)
+
+    def fit_font(self, t: str, max_width: float, start_pt: int, *, bold: bool = False,
+                 floor: int = 22, step: int = 2):
+        """Largest font ≤ `start_pt` whose `t` fits `max_width` (min `floor`).
+        Pair with stack_height so auto-shrunk text still gets an exact box."""
+        make = self.fb if bold else self.fr
+        f = make(start_pt)
+        while self.ink(t, f)[0] > max_width and f.size > floor:
+            f = make(f.size - step)
+        return f
+
     # ── escape hatch + output ────────────────────────────────────────────
     @property
     def draw(self) -> ImageDraw.ImageDraw:
