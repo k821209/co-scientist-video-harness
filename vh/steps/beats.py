@@ -41,6 +41,9 @@ a panel reaction or a piano cutaway often enough to matter.
 from __future__ import annotations
 
 import pathlib
+import hashlib
+import json
+import os
 import subprocess
 from dataclasses import dataclass
 
@@ -82,6 +85,39 @@ def _dur(path) -> float:
 
 def _run(args):
     subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", *args], check=True)
+
+
+def _file_sig(path) -> str:
+    """A file's identity for caching: name + size + mtime. Cheap and enough to
+    notice a re-exported card or a swapped clip."""
+    try:
+        st = os.stat(path)
+        return f"{pathlib.Path(path).name}:{st.st_size}:{int(st.st_mtime)}"
+    except OSError:
+        return f"{path}:missing"
+
+
+def _seg_fingerprint(b: "Beat", sd: float, ov_path, *, gfx, clips, precrop,
+                     fps: int, canvas, encode_args) -> str:
+    """Everything that determines a segment's pixels — so an unchanged beat can
+    be skipped on a rebuild (reuse_segments). Covers: the beat's timing (sd, from
+    its VO length), the source file (card png / photo / clip, by size+mtime),
+    the clip in-point + precrop, the overlay image content (caption/credit/
+    accent — hashed), and the encode geometry/params."""
+    parts = [b.kind, str(b.visual), f"at={b.at}", f"sd={sd}", f"fps={fps}",
+             f"{canvas[0]}x{canvas[1]}", "enc=" + "|".join(map(str, encode_args))]
+    if b.kind == "gfx":
+        parts.append("src=" + _file_sig(pathlib.Path(gfx) / f"{b.visual}.png"))
+    elif b.kind == "photo":
+        parts.append("src=" + _file_sig(b.visual))
+    else:  # clip
+        parts.append("src=" + _file_sig(clips.get(b.visual, b.visual)))
+        parts.append("precrop=" + precrop.get(b.visual, ""))
+    try:
+        parts.append("ov=" + hashlib.sha1(pathlib.Path(ov_path).read_bytes()).hexdigest())
+    except OSError:
+        pass
+    return hashlib.sha1("\x1e".join(parts).encode("utf-8")).hexdigest()
 
 
 def _overlay(beat: Beat, path, w: int, h: int, accent, font_bold, font_regular):
@@ -146,6 +182,7 @@ def build_beat_short(
     font_bold: str = FONT_BOLD,
     font_regular: str = FONT_REGULAR,
     reuse_vo: bool = True,
+    reuse_segments: bool = True,
 ) -> dict:
     """Assemble a beat-driven Short. Returns {final, duration, vo, segments}.
 
@@ -156,18 +193,37 @@ def build_beat_short(
     bgm       looped under the VO with sidechain ducking; None = voice only
     loudnorm  target LUFS for the final mix (None to skip)
     reuse_vo  keep already-synthesized vo/<id>.mp3 (re-runs stay fast)
+    reuse_segments  skip re-encoding a segment whose inputs are unchanged
+              (source file, in-point, VO length, overlay, encode params — all
+              fingerprinted in workdir/.seg_cache.json). A one-card edit then
+              re-encodes one segment, not all N. Delete the workdir to force a
+              full rebuild.
 
     Segment length is VO length + pad, so a clip must have at least that much
     material left after its in-point — asserted per beat rather than silently
     freezing on the last frame.
     """
     W, H = canvas
+    accent = tuple(accent)
+    if len(accent) == 3:            # accept an RGB card-colour; PIL overlay needs RGBA
+        accent = (*accent, 255)
     wd = pathlib.Path(workdir)
     (wd / "vo").mkdir(parents=True, exist_ok=True)
     gfx = pathlib.Path(gfx_dir) if gfx_dir else wd
     clips = clips or {}
     precrop = precrop or {}
     beats = [Beat.coerce(b) for b in beats]
+
+    # Per-segment reuse cache: {beat_id: input-fingerprint} from the last build.
+    cache_path = wd / ".seg_cache.json"
+    prev_cache: dict = {}
+    if reuse_segments and cache_path.exists():
+        try:
+            prev_cache = json.loads(cache_path.read_text())
+        except Exception:
+            prev_cache = {}
+    new_cache: dict = {}
+    reused = 0
 
     blur = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
             f"boxblur=22:2,eq=brightness=-0.18")
@@ -188,6 +244,14 @@ def build_beat_short(
         nf = int(sd * fps)
         ov = _overlay(b, wd / f"ov_{b.id}.png", W, H, accent, font_bold, font_regular)
         seg = wd / f"seg_{b.id}.mp4"
+
+        fp = _seg_fingerprint(b, sd, ov, gfx=gfx, clips=clips, precrop=precrop,
+                              fps=fps, canvas=(W, H), encode_args=config.encode_args())
+        if reuse_segments and seg.exists() and prev_cache.get(b.id) == fp:
+            new_cache[b.id] = fp
+            reused += 1
+            segs.append((b.id, sd))
+            continue
 
         if b.kind == "gfx":
             vf = (f"[0:v]scale={int(W * 1.04)}:{int(H * 1.04)},"
@@ -226,7 +290,11 @@ def build_beat_short(
 
         got = _dur(seg)
         assert abs(got - sd) < 0.25, f"{b.id}: segment is {got:.2f}s, wanted {sd:.2f}s"
+        new_cache[b.id] = fp
         segs.append((b.id, sd))
+
+    if reuse_segments:
+        cache_path.write_text(json.dumps(new_cache))
 
     # 3. silent outro card
     if outro:
@@ -291,4 +359,6 @@ def build_beat_short(
           "-c:a", "aac", "-b:a", "160k", out])
 
     return {"final": out, "duration": _dur(out), "vo": str(votrack),
-            "segments": [{"id": b, "dur": d} for b, d in segs]}
+            "reused_segments": reused,
+            "segments": [{"id": b, "dur": d, "path": str(wd / f"seg_{b}.mp4")}
+                         for b, d in segs]}

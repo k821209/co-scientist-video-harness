@@ -22,3 +22,33 @@ def test_later_beat_caption_is_not_eyecatch():
 def test_beat_passes_through():
     b = Beat("b2", "photo", "본문", "img/x.jpg", caption="캡션")
     assert Beat.coerce(b) is b
+
+
+# ── segment reuse fingerprint (feedback 8587d866794a) ──────────────────────
+
+def test_seg_fingerprint_stable_and_sensitive(tmp_path):
+    from vh.steps.beats import Beat, _seg_fingerprint
+    card = tmp_path / "g_open.png"; card.write_bytes(b"CARDv1")
+    ov = tmp_path / "ov_b1.png"; ov.write_bytes(b"OVERLAYv1")
+    b = Beat.coerce(("b1", "gfx", "본문", "g_open", 0.0, None, None))
+    kw = dict(gfx=tmp_path, clips={}, precrop={}, fps=25, canvas=(1080, 1920),
+              encode_args=["-c:v", "mpeg4"])
+    fp1 = _seg_fingerprint(b, 7.3, ov, **kw)
+    assert fp1 == _seg_fingerprint(b, 7.3, ov, **kw)          # stable
+    assert fp1 != _seg_fingerprint(b, 9.0, ov, **kw)          # VO length changed
+    ov.write_bytes(b"OVERLAYv2-caption-edit")
+    assert fp1 != _seg_fingerprint(b, 7.3, ov, **kw)          # overlay changed
+    card.write_bytes(b"CARDv2-relaid-out-and-longer")           # size+mtime change
+    assert fp1 != _seg_fingerprint(b, 7.3, tmp_path / "ov_b1.png", **kw)  # source card changed
+
+
+def test_seg_fingerprint_clip_tracks_precrop(tmp_path):
+    from vh.steps.beats import Beat, _seg_fingerprint
+    clip = tmp_path / "keynote.mp4"; clip.write_bytes(b"CLIPBYTES")
+    ov = tmp_path / "ov_b0.png"; ov.write_bytes(b"OV")
+    b = Beat.coerce(("b0", "clip", "훅", "keynote", 11.0, "cap", "cred"))
+    base = dict(gfx=tmp_path, clips={"keynote": str(clip)}, fps=25,
+                canvas=(1080, 1920), encode_args=["-c:v", "mpeg4"])
+    fp1 = _seg_fingerprint(b, 7.3, ov, precrop={}, **base)
+    fp2 = _seg_fingerprint(b, 7.3, ov, precrop={"keynote": "crop=iw:ih*0.9:0:0,"}, **base)
+    assert fp1 != fp2                                          # precrop is part of identity

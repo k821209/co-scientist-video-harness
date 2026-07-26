@@ -15,17 +15,36 @@ seconds, and both are meant to be *read*, not just run:
 from __future__ import annotations
 
 import difflib
+import math
 import subprocess
 
 from . import config
 
 
-def contact_sheet(src: str, out_png: str, *, every: float = 8.0, cols: int = 7,
-                  rows: int = 2, width: int = 300) -> str:
+def _duration(src: str) -> float:
+    return float(subprocess.check_output(
+        [config.FFPROBE, "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", str(src)]).strip())
+
+
+def contact_sheet(src: str, out_png: str, *, every: float = 8.0,
+                  cols: int | None = None, rows: int | None = None,
+                  width: int = 300) -> str:
     """Tile one frame every `every` seconds into a single grid PNG.
 
-    Size the grid to the video (`cols*rows >= duration/every`) or the tail is
-    silently dropped — a cut-off sheet reads as "I checked it" when you didn't."""
+    Leave `cols`/`rows` unset and the grid is sized to the video so no frame is
+    dropped (a cut-off sheet reads as "I checked it" when you didn't). Give one
+    to fix that dimension; give both to force an exact grid (may truncate)."""
+    tiles = max(1, math.ceil(_duration(src) / every))
+    if cols and rows:
+        pass                                   # explicit grid — caller's choice
+    elif cols:
+        rows = math.ceil(tiles / cols)
+    elif rows:
+        cols = math.ceil(tiles / rows)
+    else:                                      # auto: near-square, covers all tiles
+        cols = math.ceil(math.sqrt(tiles))
+        rows = math.ceil(tiles / cols)
     subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", "-i", src,
                     "-vf", f"fps=1/{every},scale={width}:-1,tile={cols}x{rows}",
                     "-frames:v", "1", out_png], check=True)
