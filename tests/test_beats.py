@@ -52,3 +52,13 @@ def test_seg_fingerprint_clip_tracks_precrop(tmp_path):
     fp1 = _seg_fingerprint(b, 7.3, ov, precrop={}, **base)
     fp2 = _seg_fingerprint(b, 7.3, ov, precrop={"keynote": "crop=iw:ih*0.9:0:0,"}, **base)
     assert fp1 != fp2                                          # precrop is part of identity
+
+
+def test_final_encode_rejects_bad_value(tmp_path):
+    """final_encode is validated up-front (before any ffmpeg work)."""
+    import pytest
+    from vh.steps.beats import build_beat_short
+    with pytest.raises(ValueError, match="final_encode"):
+        build_beat_short([("b1", "gfx", "x", "g", 0.0, None, None)],
+                         str(tmp_path / "o.mp4"), workdir=str(tmp_path / "wd"),
+                         final_encode="nope")
