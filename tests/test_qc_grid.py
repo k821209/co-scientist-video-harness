@@ -78,3 +78,40 @@ def test_undersized_grid_warns_about_truncation(monkeypatch, capsys):
     qc.contact_sheet("in.mp4", "out.png", every=6, cols=2, rows=1)   # 15 needed, 2 shown
     msg = capsys.readouterr().out
     assert "do not fit" in msg and "FIRST 2" in msg          # loud, not silent
+
+
+# ── narration_drift: reference audio vs regenerated output (534950300c1f) ───
+
+def _drift(monkeypatch, ref_text, out_text, **kw):
+    """Stub the ASR: first call returns the reference words, second the output."""
+    from vh.steps import transcribe as tr
+
+    class W:
+        def __init__(self, t): self.text = t
+    texts = [ref_text, out_text]
+    monkeypatch.setattr(tr, "transcribe",
+                        lambda path, lang=None, prompt=None: [W(t) for t in texts.pop(0).split()])
+    return qc.narration_drift("ref.wav", "out.mp4", **kw)
+
+
+def test_drift_flags_a_changed_date(monkeypatch):
+    """The real failure: a generative lip-sync changed 7월 14일 → 10월 14일."""
+    r = _drift(monkeypatch, "이란은 7월 14일 핵 역량을 공개했다",
+                            "이란은 10월 14일 핵 영향을 공개했다")
+    assert r["ok"] is False
+    joined = " ".join(d["reference"] + "→" + d["output"] for d in r["drift"])
+    assert "7월" in joined and "10월" in joined       # the date drift is reported
+    assert any("역량" in d["reference"] for d in r["drift"])
+
+
+def test_identical_speech_is_clean(monkeypatch):
+    same = "이란은 어제 핵 시설을 공개했다"
+    r = _drift(monkeypatch, same, same)
+    assert r["ok"] is True and r["drift"] == [] and r["ratio"] == 1.0
+
+
+def test_shared_asr_error_is_not_drift(monkeypatch):
+    """Whisper mis-hearing the SAME way in both transcripts must not fire —
+    that's the whole point of comparing two transcripts."""
+    r = _drift(monkeypatch, "대일한 정책은 유지된다", "대일한 정책은 유지된다")
+    assert r["ok"] is True and r["drift"] == []

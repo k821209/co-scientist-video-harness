@@ -11,6 +11,10 @@ seconds, and both are meant to be *read*, not just run:
   script you meant to say. Catches a truncated VO, a mis-muxed audio track, or a
   beat whose narration never made it in. ≥0.93 is normal for Korean TTS
   (proper nouns always mis-transcribe); a sudden drop means something is wrong.
+- `narration_drift()` → transcribe a REFERENCE audio and the OUTPUT and diff
+  those two. For stages that regenerate the voice (generative lip-sync, voice
+  conversion), where the words themselves can change — a wrong date reads as a
+  clean render. Comparing two transcripts cancels the ASR's own mistakes.
 """
 from __future__ import annotations
 
@@ -115,6 +119,48 @@ def _fold_numerals(s: str) -> str:
             out.append(s[i:j])
             i = j
     return "".join(out)
+
+
+def narration_drift(reference: str, output: str, language: str = "ko",
+                    *, fold_numerals: bool = True, min_ratio: float = 0.97) -> dict:
+    """Compare what the REFERENCE audio says with what the OUTPUT says.
+
+    Use this whenever a stage REGENERATES the voice instead of copying it — a
+    generative lip-sync (LTX and friends), a voice conversion, a re-dub. Those
+    stages take your TTS as a style reference and synthesize new speech, so the
+    words can come out different: a real episode had "7월 14일" become
+    "10월 14일" (a wrong date — publishable misinformation), "핵 역량" become
+    "핵 영향", "합동 공습" become "협동 공습" — in 3 of 7 clips.
+
+    `narration_match(output, script)` cannot catch this: a mismatch there is
+    indistinguishable from whisper mis-hearing the audio. Transcribing BOTH with
+    the same model cancels the ASR's own errors — whatever differs is drift the
+    generator introduced.
+
+    Returns {ratio, ok, drift: [{reference, output}], reference_transcript,
+    output_transcript}. `ok` is ratio >= min_ratio AND no drift spans. Run it per
+    clip BEFORE assembly: re-rendering one clip is far cheaper than redoing the
+    episode.
+    """
+    from .steps.transcribe import transcribe
+
+    def say(path: str) -> str:
+        return " ".join(w.text for w in transcribe(path, language))
+
+    ref_text, out_text = say(reference), say(output)
+
+    def toks(s: str) -> list[str]:
+        if fold_numerals:
+            s = _fold_numerals(s)
+        return ["".join(c for c in t if c.isalnum()) for t in s.split() if t.strip()]
+
+    a, b = toks(ref_text), toks(out_text)
+    sm = difflib.SequenceMatcher(None, a, b)
+    drift = [{"reference": " ".join(a[i1:i2]), "output": " ".join(b[j1:j2])}
+             for tag, i1, i2, j1, j2 in sm.get_opcodes() if tag != "equal"]
+    ratio = sm.ratio()
+    return {"ratio": ratio, "ok": ratio >= min_ratio and not drift, "drift": drift,
+            "reference_transcript": ref_text, "output_transcript": out_text}
 
 
 def narration_match(video: str, script: str, language: str = "ko",
