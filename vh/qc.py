@@ -45,8 +45,22 @@ def contact_sheet(src: str, out_png: str, *, every: float = 8.0,
     else:                                      # auto: near-square, covers all tiles
         cols = math.ceil(math.sqrt(tiles))
         rows = math.ceil(tiles / cols)
+
+    # Cap the sampled frames at exactly one grid BEFORE tiling. Without this,
+    # more frames than fit produced several tile outputs and which one landed in
+    # the file depended on ffmpeg's -frames:v/image2 behaviour — on some builds
+    # the LAST group won, so the sheet silently began mid-video (a cold open
+    # missing from the sheet reads as "I checked it"). One group in → one sheet
+    # out, always anchored at t=0.
+    cap = cols * rows
+    if tiles > cap:
+        print(f"[qc] contact_sheet: {tiles} frames at every={every}s do not fit "
+              f"{cols}x{rows}={cap}; showing the FIRST {cap} "
+              f"(~{cap * every:.0f}s of {_duration(src):.0f}s). "
+              f"Raise the grid or `every` to cover the whole video.")
     subprocess.run([config.FFMPEG, "-y", "-loglevel", "error", "-i", src,
-                    "-vf", f"fps=1/{every},scale={width}:-1,tile={cols}x{rows}",
+                    "-vf", (f"fps=1/{every},scale={width}:-1,"
+                            f"trim=end_frame={cap},tile={cols}x{rows}"),
                     "-frames:v", "1", out_png], check=True)
     return out_png
 

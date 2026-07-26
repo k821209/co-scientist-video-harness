@@ -53,3 +53,28 @@ def test_fold_numerals_leaves_ordinary_words_alone():
         assert _fold_numerals(word) == word
     # but a real numeral run is folded, magnitude word kept as text
     assert _fold_numerals("십사조 육천억") == "14조 6000억"
+
+
+# ── sheet must be anchored at t=0 (feedback abd6d722a684) ───────────────────
+
+def test_frames_are_capped_to_one_grid(monkeypatch):
+    """More samples than tiles must be capped BEFORE tile, so exactly one sheet
+    is produced and it starts at the first sample — not the last group."""
+    seen = {}
+    monkeypatch.setattr(qc, "_duration", lambda src: 86.0)
+    def fake_run(args, **k):
+        seen["vf"] = args[args.index("-vf") + 1]
+        return None
+    monkeypatch.setattr(qc.subprocess, "run", fake_run)
+    qc.contact_sheet("in.mp4", "out.png", every=6, cols=5, rows=3)   # 15 tiles, 15 frames
+    vf = seen["vf"]
+    assert "trim=end_frame=15" in vf                       # capped to exactly one grid
+    assert vf.index("trim=end_frame=") < vf.index("tile=")  # cap BEFORE tiling
+
+
+def test_undersized_grid_warns_about_truncation(monkeypatch, capsys):
+    monkeypatch.setattr(qc, "_duration", lambda src: 86.0)
+    monkeypatch.setattr(qc.subprocess, "run", lambda *a, **k: None)
+    qc.contact_sheet("in.mp4", "out.png", every=6, cols=2, rows=1)   # 15 needed, 2 shown
+    msg = capsys.readouterr().out
+    assert "do not fit" in msg and "FIRST 2" in msg          # loud, not silent
