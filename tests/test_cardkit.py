@@ -75,3 +75,34 @@ def test_fit_font_shrinks_to_fit_and_respects_floor():
     assert c.fit_font(long, 10, 60, floor=24).size == 24        # floor honoured
     short = c.fit_font("무게", 700, 40)
     assert short.size == 40                                     # already fits: unchanged
+
+
+# ── reference-video window (feedback 49f3ca81469d) ──────────────────────────
+
+def test_window_snaps_to_even_and_records_rect(capsys):
+    """Odd sizes break h264_nvenc (exit 234), so they're snapped down + reported."""
+    from vh.cardkit import Card
+    c = Card(w=1080, h=1920)
+    bottom = c.window("g_hook", 61, 321, 961, 541)
+    assert c.windows["g_hook"] == [60, 320, 960, 540]
+    assert bottom == 320 + 540
+    assert "snapped to even" in capsys.readouterr().out
+
+
+def test_window_sidecar_written_on_save(tmp_path):
+    """The assembler reads coordinates from the sidecar, never from code."""
+    import json
+    from vh.cardkit import Card
+    c = Card(w=1080, h=1920)
+    c.window("g_hook", 60, 320, 960, 540)
+    c.save(tmp_path / "g_hook.png")
+    sc = tmp_path / "g_hook.windows.json"
+    assert sc.exists() and json.loads(sc.read_text()) == {"g_hook": [60, 320, 960, 540]}
+
+
+def test_no_sidecar_when_card_has_no_window(tmp_path):
+    from vh.cardkit import Card
+    c = Card(w=1080, h=600)
+    c.text((540, 300), "제목", c.fb(60), c.FG)
+    c.save(tmp_path / "plain.png")
+    assert not (tmp_path / "plain.windows.json").exists()

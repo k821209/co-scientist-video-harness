@@ -24,6 +24,7 @@ hand-guessed offset — that is the whole point.
 """
 from __future__ import annotations
 
+import json
 import pathlib
 
 from PIL import Image, ImageDraw, ImageFont
@@ -56,6 +57,7 @@ class Card:
             self.d.line([(0, y), (self.W, y)],
                         fill=tuple(int(top[i] + (bot[i] - top[i]) * t) for i in range(3)))
         self.boxes: list[tuple[float, float, float, float]] = []
+        self.windows: dict[str, list[int]] = {}   # name -> [x, y, w, h]
 
     # ── fonts ────────────────────────────────────────────────────────────
     @staticmethod
@@ -143,6 +145,43 @@ class Card:
             f = make(f.size - step)
         return f
 
+    # ── reference-video window ───────────────────────────────────────────
+    def window(self, name: str, x: int, y: int, w: int, h: int, *,
+               label: str | None = "참고 영상", border=None, fill=(8, 8, 10),
+               label_pt: int = 24, radius: int = 10) -> float:
+        """Reserve a rectangle for a REFERENCE VIDEO that plays inside the card.
+
+        Draws the frame (border + label) and leaves the interior flat; the clip is
+        composited there at assembly time — pass `ref_video={name: (clip, at)}` to
+        `build_beat_short`, which reads the sidecar this writes.
+
+        Quoting a clip *inside the card* instead of cutting to it removes the need
+        for a filler line ("here's that video") whose only job was to give the cut
+        a duration: the window runs for as long as the beat's narration does. A
+        real episode came out 122s instead of 138s with MORE quotes and no empty
+        narration, and the cold open reads better because the first frame already
+        moves.
+
+        Coordinates are snapped DOWN to even numbers — h264_nvenc rejects odd
+        dimensions (exit 234, with nothing in the message about it).
+
+        Returns the window's bottom y. Saved to `<card>.windows.json` by save()."""
+        ex, ey, ew, eh = (int(v) - int(v) % 2 for v in (x, y, w, h))
+        if (ex, ey, ew, eh) != (int(x), int(y), int(w), int(h)):
+            print(f"[cardkit] window {name!r}: snapped to even "
+                  f"{ew}x{eh} at ({ex},{ey}) — odd sizes break h264_nvenc")
+        col = border or self.LAV
+        self.d.rounded_rectangle([ex - 4, ey - 4, ex + ew + 4, ey + eh + 4],
+                                 radius=radius, outline=col, width=3)
+        self.d.rectangle([ex, ey, ex + ew, ey + eh], fill=fill)
+        if label:
+            f = self.fr(label_pt)
+            tw = self.ink(label, f)[0]
+            self.d.rectangle([ex, ey - 42, ex + tw + 30, ey - 4], fill=col)
+            self.text((ex + 15 + tw / 2, ey - 24), label, f, (18, 14, 18))
+        self.windows[name] = [ex, ey, ew, eh]
+        return ey + eh
+
     # ── escape hatch + output ────────────────────────────────────────────
     @property
     def draw(self) -> ImageDraw.ImageDraw:
@@ -150,7 +189,21 @@ class Card:
         return self.d
 
     def save(self, path) -> str:
+        """Write the PNG. If the card has windows, also write the
+        `<stem>.windows.json` sidecar the assembler reads — the renderer and the
+        assembler share coordinates through this file, never through code, so a
+        card can be re-laid-out without touching the build."""
         p = pathlib.Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         self.im.save(p)
+        if self.windows:
+            sidecar = p.with_suffix("").with_suffix(".windows.json")
+            existing = {}
+            if sidecar.exists():
+                try:
+                    existing = json.loads(sidecar.read_text())
+                except Exception:
+                    existing = {}
+            existing.update(self.windows)
+            sidecar.write_text(json.dumps(existing, ensure_ascii=False))
         return str(p)

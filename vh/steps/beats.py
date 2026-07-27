@@ -112,7 +112,8 @@ def _file_sig(path, *, prefer_hash: bool = True) -> str:
 
 
 def _seg_fingerprint(b: "Beat", sd: float, ov_path, *, gfx, clips, precrop,
-                     fps: int, canvas, encode_args, vo_path=None) -> str:
+                     fps: int, canvas, encode_args, vo_path=None,
+                     ref=None, window=None) -> str:
     """Everything that determines a segment's pixels — so an unchanged beat can
     be skipped on a rebuild (reuse_segments). Covers: the beat's timing (sd, from
     its VO length), the source file (card png / photo by content hash, clip by
@@ -131,6 +132,10 @@ def _seg_fingerprint(b: "Beat", sd: float, ov_path, *, gfx, clips, precrop,
         parts.append("precrop=" + precrop.get(b.visual, ""))
     if vo_path is not None:
         parts.append("vo=" + _file_sig(vo_path))
+    if ref is not None:                 # reference video inside a card window
+        rsrc, rat = (ref if isinstance(ref, (tuple, list)) else (ref, 0.0))
+        parts.append("ref=" + _file_sig(rsrc, prefer_hash=False) + f"@{float(rat or 0.0)}")
+        parts.append("win=" + ",".join(map(str, window or [])))
     try:
         parts.append("ov=" + hashlib.sha1(pathlib.Path(ov_path).read_bytes()).hexdigest())
     except OSError:
@@ -202,6 +207,7 @@ def build_beat_short(
     reuse_vo: bool = True,
     reuse_segments: bool = True,
     final_encode: str = "reencode",
+    ref_video: dict | None = None,
 ) -> dict:
     """Assemble a beat-driven Short. Returns {final, duration, vo, segments}.
 
@@ -221,6 +227,13 @@ def build_beat_short(
               publish-ready file; "copy" stream-copies instead (~60x faster,
               ~40% larger) for intermediate preview builds — re-encode once
               before publishing. (concat is always stream-copied.)
+    ref_video  {card_name: clip_path | (clip_path, in_point)} — play a quoted
+              clip INSIDE that card's window (drawn with `cardkit.Card.window`,
+              coordinates read from the card's `.windows.json` sidecar). The
+              window runs for the whole beat, so a quote needs no filler line
+              and no length matching; the clip is fitted whole and never
+              precropped (see the gfx branch). Audio is dropped — only the VO is
+              heard — so keep the on-screen `credit`.
 
     Segment length is VO length + pad, so a clip must have at least that much
     material left after its in-point — asserted per beat rather than silently
@@ -237,7 +250,25 @@ def build_beat_short(
     gfx = pathlib.Path(gfx_dir) if gfx_dir else wd
     clips = clips or {}
     precrop = precrop or {}
+    ref_video = ref_video or {}
     beats = [Beat.coerce(b) for b in beats]
+
+    # Window rectangles come from each card's sidecar (written by Card.save), so
+    # the renderer and the assembler never share coordinates in code.
+    windows: dict = {}
+    for name in ref_video:
+        sc = gfx / f"{name}.windows.json"
+        if sc.exists():
+            try:
+                windows.update(json.loads(sc.read_text()))
+            except Exception:
+                pass
+    missing = [n for n in ref_video if n not in windows]
+    if missing:
+        raise ValueError(
+            f"ref_video names with no window: {missing}. Draw the window with "
+            f"cardkit Card.window('<name>', x, y, w, h) and save the card — that "
+            f"writes <card>.windows.json next to the PNG in {gfx}.")
 
     # Per-segment reuse cache: {beat_id: input-fingerprint} from the last build.
     cache_path = wd / ".seg_cache.json"
@@ -289,7 +320,8 @@ def build_beat_short(
 
         fp = _seg_fingerprint(b, sd, ov, gfx=gfx, clips=clips, precrop=precrop,
                               fps=fps, canvas=(W, H), encode_args=config.encode_args(),
-                              vo_path=vo)
+                              vo_path=vo, ref=ref_video.get(b.visual),
+                              window=windows.get(b.visual))
         if reuse_segments and seg.exists() and prev_cache.get(b.id) == fp:
             new_cache[b.id] = fp
             reused += 1
@@ -297,13 +329,42 @@ def build_beat_short(
             continue
 
         if b.kind == "gfx":
-            vf = (f"[0:v]scale={int(W * 1.04)}:{int(H * 1.04)},"
-                  f"zoompan=z='min(zoom+0.00018,1.045)':d={nf}:"
-                  f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps={fps},"
-                  f"trim=duration={sd}[v0];[v0][1:v]overlay=0:0,fps={fps}[v]")
-            _run(["-loop", "1", "-i", str(gfx / f"{b.visual}.png"), "-i", ov,
-                  "-filter_complex", vf, "-map", "[v]", "-t", str(sd), "-an",
-                  *config.encode_args(), "-r", str(fps), str(seg)])
+            win = windows.get(b.visual)
+            ref = ref_video.get(b.visual)
+            if win and ref:
+                # Reference video INSIDE the card's window. No camera move (a
+                # zoompan would drag the window off its drawn frame), the clip is
+                # fitted whole (decrease+pad) and NOT precropped: unlike a
+                # full-screen quote, a broadcaster's burnt-in caption doesn't
+                # collide with our layout here, and cropping it half-away looks
+                # worse AND removes the channel logo that shows where the quote
+                # came from.
+                rx, ry, rw, rh = win
+                rsrc, rat = (ref if isinstance(ref, (tuple, list)) else (ref, 0.0))
+                rat = float(rat or 0.0)
+                have = _dur(rsrc) - rat
+                assert have >= sd - 0.05, (
+                    f"{b.id}: reference video {pathlib.Path(str(rsrc)).name!r} has "
+                    f"{have:.2f}s left after in-point {rat}s but the window must run "
+                    f"{sd:.2f}s — grab a longer source (~75s) or pick an earlier "
+                    f"in-point.")
+                vf = (f"[1:v]scale={rw}:{rh}:force_original_aspect_ratio=decrease,"
+                      f"pad={rw}:{rh}:(ow-iw)/2:(oh-ih)/2:color=0x08080a,"
+                      f"setsar=1,fps={fps}[win];"
+                      f"[0:v][win]overlay={rx}:{ry}[base];"
+                      f"[base][2:v]overlay=0:0,fps={fps}[v]")
+                _run(["-loop", "1", "-i", str(gfx / f"{b.visual}.png"),
+                      "-ss", str(rat), "-t", str(sd), "-i", str(rsrc), "-i", ov,
+                      "-filter_complex", vf, "-map", "[v]", "-t", str(sd), "-an",
+                      *config.encode_args(), "-r", str(fps), str(seg)])
+            else:
+                vf = (f"[0:v]scale={int(W * 1.04)}:{int(H * 1.04)},"
+                      f"zoompan=z='min(zoom+0.00018,1.045)':d={nf}:"
+                      f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps={fps},"
+                      f"trim=duration={sd}[v0];[v0][1:v]overlay=0:0,fps={fps}[v]")
+                _run(["-loop", "1", "-i", str(gfx / f"{b.visual}.png"), "-i", ov,
+                      "-filter_complex", vf, "-map", "[v]", "-t", str(sd), "-an",
+                      *config.encode_args(), "-r", str(fps), str(seg)])
 
         elif b.kind == "photo":
             vf = (f"[0:v]split[a][b];[a]{blur}[bg];[b]scale={W}:-2[fg];"

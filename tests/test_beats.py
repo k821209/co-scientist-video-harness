@@ -95,3 +95,30 @@ def test_seg_fingerprint_tracks_vo_content(tmp_path):
     fp1 = _seg_fingerprint(b, 7.3, ov, vo_path=vo, **kw)
     vo.write_bytes(b"NEW-AUDIO")                              # same byte-length
     assert _seg_fingerprint(b, 7.3, ov, vo_path=vo, **kw) != fp1
+
+
+# ── ref_video: quoted clip inside a card window (feedback 49f3ca81469d) ─────
+
+def test_ref_video_without_a_window_raises_with_guidance(tmp_path):
+    import pytest
+    from vh.steps.beats import build_beat_short
+    (tmp_path / "wd").mkdir()
+    with pytest.raises(ValueError, match="no window"):
+        build_beat_short([("b0", "gfx", "훅", "g_hook", 0.0, None, None)],
+                         str(tmp_path / "o.mp4"), workdir=str(tmp_path / "wd"),
+                         gfx_dir=str(tmp_path), ref_video={"g_hook": "clip.mp4"})
+
+
+def test_seg_fingerprint_tracks_ref_video_and_in_point(tmp_path):
+    from vh.steps.beats import Beat, _seg_fingerprint
+    card = tmp_path / "g_hook.png"; card.write_bytes(b"CARD")
+    ov = tmp_path / "ov.png"; ov.write_bytes(b"OV")
+    clip = tmp_path / "ref.mp4"; clip.write_bytes(b"REFCLIP")
+    b = Beat.coerce(("b0", "gfx", "훅", "g_hook", 0.0, None, None))
+    kw = dict(gfx=tmp_path, clips={}, precrop={}, fps=25, canvas=(1080, 1920),
+              encode_args=["-c:v", "mpeg4"], window=[60, 320, 960, 540])
+    fp_at3 = _seg_fingerprint(b, 6.5, ov, ref=(str(clip), 3.0), **kw)
+    assert fp_at3 != _seg_fingerprint(b, 6.5, ov, ref=(str(clip), 9.0), **kw)  # in-point
+    assert fp_at3 != _seg_fingerprint(b, 6.5, ov, ref=None, **kw)              # window on/off
+    kw2 = {**kw, "window": [60, 320, 720, 405]}
+    assert fp_at3 != _seg_fingerprint(b, 6.5, ov, ref=(str(clip), 3.0), **kw2)  # window size
