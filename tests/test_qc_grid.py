@@ -115,3 +115,43 @@ def test_shared_asr_error_is_not_drift(monkeypatch):
     that's the whole point of comparing two transcripts."""
     r = _drift(monkeypatch, "대일한 정책은 유지된다", "대일한 정책은 유지된다")
     assert r["ok"] is True and r["drift"] == []
+
+
+# ── lint_vo: catch TTS mis-readings BEFORE synthesis (feedback 4c9a7f46336f) ─
+
+def test_lint_vo_flags_digits_and_native_counter():
+    """'7번' is read as '일곱 번' — and whisper transcribes it back as '7번',
+    so only a pre-synthesis check can see it."""
+    kinds = {w["kind"] for w in qc.lint_vo("등번호는 7번입니다")}
+    assert kinds == {"native_counter", "digits_in_vo"}
+    got = [w for w in qc.lint_vo("등번호는 7번입니다") if w["kind"] == "native_counter"][0]
+    assert got["match"] == "7번" and "칠 번" in got["note"]     # prescription included
+
+
+def test_lint_vo_flags_big_arabic_figures():
+    w = qc.lint_vo("네이버 매출은 13조 원입니다")
+    assert [x["kind"] for x in w] == ["digits_in_vo"]
+    assert "Hangul" in w[0]["note"]
+
+
+def test_lint_vo_flags_ambiguous_day_even_in_hangul():
+    """십일일/이십일일 are mis-HEARD however they're spelled — drop the day."""
+    w = qc.lint_vo("십이월 십일일에 개봉합니다")
+    assert [x["kind"] for x in w] == ["ambiguous_day"]
+    assert "card only" in w[0]["note"]
+    assert qc.lint_vo("이십일일에 시작합니다")[0]["kind"] == "ambiguous_day"
+
+
+def test_lint_vo_clean_for_correct_forms():
+    for good in ["십삼조 천칠백억 원인데", "칠 번 등번호를 받았습니다",
+                 "올해 여름은 길었습니다", "십이월에 개봉합니다"]:
+        assert qc.lint_vo(good) == [], good
+
+
+def test_lint_vo_allow_digits_switch():
+    """allow_digits silences the blanket digit warning; the counter rule stays,
+    since it has its own prescription (2026년 → '이천이십육 년')."""
+    kinds = {w["kind"] for w in qc.lint_vo("2026년 기준", allow_digits=True)}
+    assert kinds == {"native_counter"}                  # digit warning gone
+    assert "digits_in_vo" in {w["kind"] for w in qc.lint_vo("2026년 기준")}
+    assert qc.lint_vo("총 3개 지역", allow_digits=True)[0]["kind"] == "native_counter"

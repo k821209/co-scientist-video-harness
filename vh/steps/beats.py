@@ -208,6 +208,7 @@ def build_beat_short(
     reuse_segments: bool = True,
     final_encode: str = "reencode",
     ref_video: dict | None = None,
+    lint_script: bool = True,
 ) -> dict:
     """Assemble a beat-driven Short. Returns {final, duration, vo, segments}.
 
@@ -234,6 +235,9 @@ def build_beat_short(
               and no length matching; the clip is fitted whole and never
               precropped (see the gfx branch). Audio is dropped — only the VO is
               heard — so keep the on-screen `credit`.
+    lint_script  run qc.lint_vo on each beat's text before synthesis and print
+              warnings (digits / native-counter readings / ambiguous day forms).
+              Warnings only; set False to silence.
 
     Segment length is VO length + pad, so a clip must have at least that much
     material left after its in-point — asserted per beat rather than silently
@@ -297,6 +301,13 @@ def build_beat_short(
         except Exception:
             prev_vo = {}
     new_vo: dict = {}
+    if lint_script:
+        # Read the script BEFORE spending a synthesis on it — whisper normalises
+        # what it hears, so some mis-readings can never show up in a transcript.
+        from ..qc import lint_vo
+        for b in beats:
+            for w in lint_vo(b.text or ""):
+                print(f"[vo-lint] {b.id} {w['kind']}: {w['match']} — {w['note']}")
     for b in beats:
         mp3 = wd / "vo" / f"{b.id}.mp3"
         key = hashlib.sha1(

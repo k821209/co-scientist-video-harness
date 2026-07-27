@@ -20,9 +20,67 @@ from __future__ import annotations
 
 import difflib
 import math
+import re
 import subprocess
 
 from . import config
+
+
+# ── pre-synthesis VO script lint ────────────────────────────────────────────
+#
+# narration_match is an AFTER-the-fact net with holes: whisper normalises what it
+# hears, so a line read with the WRONG number word transcribes back to the digits
+# you wrote and the check passes. "7번" read as "일곱 번" (native Korean numeral
+# instead of Sino-Korean) transcribed as "7번" and looked perfect — a listener
+# caught it. Reading the script BEFORE synthesis is the only systematic defence.
+
+# Counters that pull the NATIVE reading out of a digit ("7번" → "일곱 번").
+_COUNTERS = "번|년|위|명|개|회|주|층|살|권|장|마리|대|잔|칸|줄"
+_COUNTER_RX = re.compile(rf"(\d+)\s*({_COUNTERS})")
+_DIGIT_RX = re.compile(r"\d")
+# Day-of-month forms that stay ambiguous even spelled out: 십일일(11th) is heard
+# as 12일, 이십일일(21st) as 20일. Spelling doesn't fix these — drop the day.
+_AMBIGUOUS_DAY_RX = re.compile(r"(삼?십일일|이십일일)")
+
+
+def lint_vo(text: str, *, allow_digits: bool = False) -> list[dict]:
+    """Check a VO line BEFORE synthesis. Returns [{kind, match, note}] — warnings
+    only, never raises: a year passed straight through to a card, or a deliberate
+    digit, is legitimate.
+
+    Catches the three ways Korean edge-tts mis-reads a script, each with its own
+    prescription:
+      - `digits_in_vo` — any Arabic numeral: big figures get chopped
+        ("13조" → "1, 3조"). Write numbers in Hangul in the spoken line.
+      - `native_counter` — digits + a counter read as a native numeral
+        ("7번" → "일곱 번"). Write the Sino-Korean form ("칠 번").
+      - `ambiguous_day` — 십일일 / 이십일일 / 삼십일일 are mis-HEARD however you
+        spell them. Take the day out of the VO and leave it on the card only.
+    """
+    out: list[dict] = []
+    t = text or ""
+    for m in _COUNTER_RX.finditer(t):
+        out.append({
+            "kind": "native_counter", "match": m.group(0),
+            "note": f"'{m.group(0)}' is read with the NATIVE numeral "
+                    f"(e.g. 7번 → '일곱 번'). Write the Sino-Korean form in the "
+                    f"spoken line ('칠 번') and keep the digits on the card.",
+        })
+    if not allow_digits and _DIGIT_RX.search(t):
+        out.append({
+            "kind": "digits_in_vo", "match": _DIGIT_RX.search(t).group(0),
+            "note": "Arabic numerals in a Korean VO get mis-chunked "
+                    "('13조' → '1, 3조'). Spell the number out in Hangul in the "
+                    "spoken line; keep the digits on the card.",
+        })
+    for m in _AMBIGUOUS_DAY_RX.finditer(t):
+        out.append({
+            "kind": "ambiguous_day", "match": m.group(0),
+            "note": f"'{m.group(0)}' is mis-HEARD (11일 sounds like 12일, "
+                    f"21일 like 20일) no matter how it is spelled — remove the day "
+                    f"from the VO and show it on the card only.",
+        })
+    return out
 
 
 def _duration(src: str) -> float:
