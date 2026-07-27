@@ -106,3 +106,65 @@ def test_no_sidecar_when_card_has_no_window(tmp_path):
     c.text((540, 300), "제목", c.fb(60), c.FG)
     c.save(tmp_path / "plain.png")
     assert not (tmp_path / "plain.windows.json").exists()
+
+
+# ── type hierarchy: kicker + headline (feedback fd73ad342a1e) ───────────────
+
+def test_kicker_without_headline_warns(tmp_path, capsys):
+    """The real defect: an eyebrow + a table and no big line = untitled table."""
+    from vh.cardkit import Card
+    c = Card(w=1080, h=1920)
+    c.kicker(200, "기상청 53년 분석")
+    c.row(400, "1973", "장마 6월 25일", sub="관측 기준 변경 없음")
+    c.save(tmp_path / "defect.png")
+    assert "no headline?" in capsys.readouterr().out
+
+
+def test_headline_silences_the_warning(tmp_path, capsys):
+    from vh.cardkit import Card
+    c = Card(w=1080, h=1920)
+    c.kicker(200, "기상청 53년 분석")
+    c.headline(320, "여름은 실제로 길어졌다")
+    c.save(tmp_path / "ok.png")
+    assert "no headline?" not in capsys.readouterr().out
+
+
+def test_big_number_counts_as_the_headline(tmp_path, capsys):
+    """A big figure IS the headline on plenty of good cards — must not warn."""
+    from vh.cardkit import Card
+    c = Card(w=1080, h=1920)
+    c.kicker(200, "누적 관측")
+    c.text((540, 500), "71만 5천 명", c.fb(96), c.MINT)
+    c.save(tmp_path / "bignum.png")
+    assert "no headline?" not in capsys.readouterr().out
+
+
+def test_hierarchy_check_can_be_switched_off(tmp_path, capsys):
+    from vh.cardkit import Card
+    c = Card(w=1080, h=1920, check_hierarchy=False)
+    c.kicker(200, "눈썹만")
+    c.save(tmp_path / "off.png")
+    assert capsys.readouterr().out == ""
+
+
+def test_headline_rule_gap_draws_a_guarded_divider(tmp_path):
+    """rule_gap uses the recorded bbox, so the divider can't cross the glyphs."""
+    from vh.cardkit import Card
+    c = Card(w=1080, h=1920)
+    box = c.headline(320, "여름은 실제로 길어졌다", rule_gap=26)
+    c.rule(int(box[3]) + 40, 100, 980)          # further down: still fine
+    import pytest
+    with pytest.raises(AssertionError):          # inside the glyphs: refused
+        c.rule(int((box[1] + box[3]) / 2), 100, 980)
+
+
+def test_row_groups_left_and_right_adjacent():
+    """Row parts sit as one left-anchored group, not pushed to opposite edges."""
+    from vh.cardkit import Card
+    c = Card(w=1080, h=1920)
+    c.row(400, "1973", "장마 6월 25일", sub="관측 기준 변경 없음")
+    left, right, sub = c.boxes[-3], c.boxes[-2], c.boxes[-1]
+    assert right[0] > left[2]                       # right follows left…
+    assert right[0] - left[2] < 60                  # …adjacent, not at the far edge
+    assert right[2] < c.W * 0.75                    # nothing pinned to the margin
+    assert sub[1] > left[3] and abs(sub[0] - left[0]) < 6   # sub under, left-aligned

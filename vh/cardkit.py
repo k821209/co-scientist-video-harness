@@ -47,7 +47,8 @@ class Card:
     AMBER = (250, 196, 110)
 
     def __init__(self, top=(28, 26, 38), bot=(12, 11, 18), w: int | None = None,
-                 h: int | None = None):
+                 h: int | None = None, *, check_hierarchy: bool = True,
+                 hierarchy_ratio: float = 1.6):
         self.W = w or Card.W
         self.H = h or Card.H
         self.im = Image.new("RGB", (self.W, self.H), bot)
@@ -58,6 +59,10 @@ class Card:
                         fill=tuple(int(top[i] + (bot[i] - top[i]) * t) for i in range(3)))
         self.boxes: list[tuple[float, float, float, float]] = []
         self.windows: dict[str, list[int]] = {}   # name -> [x, y, w, h]
+        self.check_hierarchy = check_hierarchy
+        self.hierarchy_ratio = hierarchy_ratio
+        self._kickers: list[tuple] = []
+        self._headlines: list[tuple] = []
 
     # ── fonts ────────────────────────────────────────────────────────────
     @staticmethod
@@ -145,6 +150,65 @@ class Card:
             f = make(f.size - step)
         return f
 
+    # ── type hierarchy: kicker + headline as a NAMED pair ────────────────
+    #
+    # The third failure mode, after collisions (rule) and margins (ink): the card
+    # renders cleanly, nothing overlaps, and it still can't be read — because it
+    # has an eyebrow and a table but no big line saying what the card is about.
+    # A hand-written `text(..., fb(76))` headline can be forgotten silently; a
+    # named pair makes "this card has no headline" visible in the code, and lets
+    # save() warn about it.
+
+    def kicker(self, y: float, text: str, *, size: int = 34, color=None,
+               x: float | None = None, align: str = "c", font=None):
+        """Small eyebrow label ("기상청 53년 분석"). Pair it with headline()."""
+        f = font or self.fr(size)
+        box = self.text((self.W / 2 if x is None else x, y), text,
+                        f, color or self.DIM, align)
+        self._kickers.append(box)
+        return box
+
+    def headline(self, y: float, text: str, *, size: int = 72, color=None,
+                 x: float | None = None, align: str = "c", bold: bool = True,
+                 max_width: float | None = None, rule_gap: int | None = None):
+        """The card's own sentence, set big ("여름은 실제로 길어졌다").
+
+        Ask of every card: **is the biggest text on it what the card is trying to
+        say?** If not, the headline is missing. `max_width` auto-shrinks to fit;
+        `rule_gap` also draws the guarded divider that far below it."""
+        f = (self.fit_font(text, max_width, size, bold=bold) if max_width
+             else (self.fb(size) if bold else self.fr(size)))
+        box = self.text((self.W / 2 if x is None else x, y), text,
+                        f, color or self.FG, align)
+        self._headlines.append(box)
+        if rule_gap is not None:
+            self.rule(int(box[3]) + rule_gap, int(box[0]), int(box[2]))
+        return box
+
+    def row(self, y: float, left: str, right: str | None = None, *,
+            sub: str | None = None, x: float = 148, gap: int = 26,
+            size: int = 40, right_size: int | None = None, sub_size: int = 30,
+            color=None, right_color=None, sub_color=None):
+        """One list row: `left` + `right` set ADJACENT (not pushed to opposite
+        edges) with `sub` left-aligned underneath.
+
+        Splitting a row's parts to the far margins leaves the middle empty and the
+        row reads as three scattered fragments instead of one item — pinning them
+        into a left-anchored group fixed exactly that (and cut the row height
+        250 → 186). Returns the row's bottom y."""
+        fl = self.fb(size)
+        lb = self.text((x, y), left, fl, color or self.FG, "l")
+        bottom = lb[3]
+        if right:
+            fr_ = self.fr(right_size or size - 6)
+            rb = self.text((lb[2] + gap, y), right, fr_, right_color or self.DIM, "l")
+            bottom = max(bottom, rb[3])
+        if sub:
+            sb = self.text((x, bottom + 14), sub, self.fr(sub_size),
+                           sub_color or self.DIM, "l", vtop=True)
+            bottom = sb[3]
+        return bottom
+
     # ── reference-video window ───────────────────────────────────────────
     def window(self, name: str, x: int, y: int, w: int, h: int, *,
                label: str | None = "참고 영상", border=None, fill=(8, 8, 10),
@@ -188,6 +252,26 @@ class Card:
         """Raw ImageDraw for shapes (panels, chips). Shapes are not guarded."""
         return self.d
 
+    def _warn_if_no_headline(self, name: str) -> None:
+        """Soft check: a card with a kicker but nothing much bigger than it
+        probably lost its headline.
+
+        Deliberately a WARNING, never an exception — plenty of good cards let a
+        big number ("71만 5천 명") or a single big word ("북한") BE the headline,
+        and those pass this test naturally. Disable with
+        `Card(..., check_hierarchy=False)`; tune with `hierarchy_ratio`."""
+        if not (self.check_hierarchy and self._kickers) or self._headlines:
+            return
+        height = lambda b: b[3] - b[1]           # noqa: E731
+        kick = max(height(b) for b in self._kickers)
+        biggest = max((height(b) for b in self.boxes), default=0.0)
+        if biggest < kick * self.hierarchy_ratio:
+            print(f"[cardkit] {name}: no headline? the biggest text is "
+                  f"{biggest:.0f}px vs a {kick:.0f}px kicker "
+                  f"(< {self.hierarchy_ratio}x). A kicker + a table with no big "
+                  f"line reads as an untitled table — add headline(), or pass "
+                  f"check_hierarchy=False if a big number IS the headline.")
+
     def save(self, path) -> str:
         """Write the PNG. If the card has windows, also write the
         `<stem>.windows.json` sidecar the assembler reads — the renderer and the
@@ -195,6 +279,7 @@ class Card:
         card can be re-laid-out without touching the build."""
         p = pathlib.Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
+        self._warn_if_no_headline(p.name)
         self.im.save(p)
         if self.windows:
             sidecar = p.with_suffix("").with_suffix(".windows.json")
