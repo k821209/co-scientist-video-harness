@@ -155,3 +155,44 @@ def test_lint_vo_allow_digits_switch():
     assert kinds == {"native_counter"}                  # digit warning gone
     assert "digits_in_vo" in {w["kind"] for w in qc.lint_vo("2026년 기준")}
     assert qc.lint_vo("총 3개 지역", allow_digits=True)[0]["kind"] == "native_counter"
+
+
+# ── fold: decimals + native numerals (feedback 4fcccd3197a8) ────────────────
+
+def test_fold_decimal_point():
+    f = qc._fold_numerals
+    assert "7.7" in f("칠 점 칠 퍼센트")
+    assert "45.4" in f("사십오 점 사 퍼센트")
+    assert "8.04" in f("팔 점 영사 퍼센트")      # fraction is a DIGIT SEQUENCE
+    assert "29.7" in f("이십구 점 칠 도")
+
+
+def test_fold_native_numerals_with_counters():
+    f = qc._fold_numerals
+    assert "8번째" in f("여덟 번째")
+    assert "9시" in f("아홉 시")
+    assert "4개" in f("네 개")
+    assert "2배" in f("두 배")
+
+
+def test_fold_single_sino_digit_before_a_counter():
+    assert "6분" in qc._fold_numerals("육 분").replace(" ", "")
+
+
+def test_fold_leaves_ordinary_words_alone_still():
+    f = qc._fold_numerals
+    for w in ["이유가 있다", "네이버는", "사과와 배", "구글", "일본 정부", "세계",
+              "점점 늘었다"]:
+        assert f(w) == w, w
+
+
+def test_narration_match_case_folds_latin(monkeypatch):
+    """A script's "ETF" vs whisper's "etf" is not a mismatch."""
+    from vh.steps import transcribe as tr
+
+    class W:
+        def __init__(self, t): self.text = t
+    monkeypatch.setattr(tr, "transcribe",
+                        lambda p, lang=None, prompt=None: [W("etf"), W("수익률은"), W("7.7%")])
+    r = qc.narration_match("v.mp4", "ETF 수익률은 칠 점 칠 퍼센트")
+    assert r["ratio"] > 0.9

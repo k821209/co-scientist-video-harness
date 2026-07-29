@@ -122,3 +122,70 @@ def test_seg_fingerprint_tracks_ref_video_and_in_point(tmp_path):
     assert fp_at3 != _seg_fingerprint(b, 6.5, ov, ref=None, **kw)              # window on/off
     kw2 = {**kw, "window": [60, 320, 720, 405]}
     assert fp_at3 != _seg_fingerprint(b, 6.5, ov, ref=(str(clip), 3.0), **kw2)  # window size
+
+
+# ── long ref_video warning + dry_run + credit skip (2026-07-29 batch) ───────
+
+def test_long_reference_video_warns(tmp_path, capsys, monkeypatch):
+    """A source much longer than the beat renders only its head — a generated
+    diagram's payoff never reaches the screen (feedback 2ad1accde731)."""
+    from vh.steps import beats as B
+    monkeypatch.setattr(B, "_dur", lambda p: 34.8 if "two" in str(p) else 12.7)
+    monkeypatch.setattr(B, "_run", lambda args: None)
+    monkeypatch.setattr(B.news, "edge_tts_speak", lambda *a, **k: None)
+    (tmp_path / "wd" / "vo").mkdir(parents=True)
+    (tmp_path / "wd" / "vo" / "b0.mp3").write_bytes(b"x")
+    (tmp_path / "g.png").write_bytes(b"png")
+    (tmp_path / "g.windows.json").write_text('{"g": [60, 320, 960, 540]}')
+    (tmp_path / "two.mp4").write_bytes(b"clip")
+    try:
+        B.build_beat_short([("b0", "gfx", "본문", "g", 0.0, None, None)],
+                           str(tmp_path / "o.mp4"), workdir=str(tmp_path / "wd"),
+                           gfx_dir=str(tmp_path), lint_script=False,
+                           ref_video={"g": (str(tmp_path / "two.mp4"), 0.0)})
+    except Exception:
+        pass                                        # later stages are stubbed
+    out = capsys.readouterr().out
+    assert "never" in out and "34.8s" in out and "diagram" in out
+
+
+def test_dry_run_returns_lengths_without_rendering(tmp_path, monkeypatch):
+    from vh.steps import beats as B
+    monkeypatch.setattr(B, "_dur", lambda p: 6.0 if "b0" in str(p) else 9.5)
+    monkeypatch.setattr(B.news, "edge_tts_speak", lambda *a, **k: None)
+    monkeypatch.setattr(B, "_run", lambda args: (_ for _ in ()).throw(
+        AssertionError("dry_run must not render")))
+    (tmp_path / "wd" / "vo").mkdir(parents=True)
+    for bid in ("b0", "b1"):
+        (tmp_path / "wd" / "vo" / f"{bid}.mp3").write_bytes(b"x")
+    r = B.build_beat_short(
+        [("b0", "gfx", "가", "g_a", 0.0, None, None),
+         ("b1", "gfx", "나", "g_b", 0.0, None, None)],
+        str(tmp_path / "o.mp4"), workdir=str(tmp_path / "wd"),
+        gfx_dir=str(tmp_path), dry_run=True, lint_script=False)
+    assert r["dry_run"] and r["total"] == 16.5          # (6.0+.5) + (9.5+.5)
+    assert [b["seg"] for b in r["beats"]] == [6.5, 10.0]
+
+
+def test_credit_skipped_when_card_draws_its_own_source(tmp_path, capsys, monkeypatch):
+    """A screen-pinned credit drifts into the card's own source line as the card
+    zooms, so the card's line wins (feedback bf8839249a77)."""
+    from vh.steps import beats as B
+    monkeypatch.setattr(B, "_dur", lambda p: 3.0)
+    monkeypatch.setattr(B, "_run", lambda args: None)
+    monkeypatch.setattr(B.news, "edge_tts_speak", lambda *a, **k: None)
+    captured = {}
+    monkeypatch.setattr(B, "_overlay",
+                        lambda beat, path, *a, **k: captured.setdefault("credit", beat.credit) or path)
+    (tmp_path / "wd" / "vo").mkdir(parents=True)
+    (tmp_path / "wd" / "vo" / "b0.mp3").write_bytes(b"x")
+    (tmp_path / "g_a.png").write_bytes(b"png")
+    (tmp_path / "g_a.windows.json").write_text('{"_reserved_bottom": [[46, 1824, 428, 28]]}')
+    try:
+        B.build_beat_short([("b0", "gfx", "본문", "g_a", 0.0, None, "사진 · Wikimedia")],
+                           str(tmp_path / "o.mp4"), workdir=str(tmp_path / "wd"),
+                           gfx_dir=str(tmp_path), lint_script=False)
+    except Exception:
+        pass
+    assert captured["credit"] is None                     # overlay got no credit
+    assert "draws its own source line" in capsys.readouterr().out

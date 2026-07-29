@@ -61,6 +61,7 @@ class Card:
         self.windows: dict[str, list[int]] = {}   # name -> [x, y, w, h]
         self.check_hierarchy = check_hierarchy
         self.hierarchy_ratio = hierarchy_ratio
+        self.reserved_bottom: list[list[int]] = []   # source lines the CARD drew
         self._kickers: list[tuple] = []
         self._headlines: list[tuple] = []
 
@@ -209,6 +210,27 @@ class Card:
             bottom = sb[3]
         return bottom
 
+    def source(self, text: str, *, y: float | None = None, x: float = 46,
+               size: int = 26, color=None, pill=(0, 0, 0, 180)):
+        """Bottom-left source line drawn BY THE CARD.
+
+        Recording it matters: the assembler's own `credit` overlay sits at a FIXED
+        screen position while the card underneath drifts with the Ken Burns zoom,
+        so a card that also draws its own source line ends up with the two
+        colliding somewhere mid-beat (visible only in some frames). Cards that
+        call this are noted in the sidecar, and `build_beat_short` then skips its
+        `credit` overlay for that beat with a warning instead of overlapping."""
+        f = self.fr(size)
+        yy = (self.H - 96) if y is None else y
+        w, h = self.ink(text, f)
+        if pill:
+            self.d.rounded_rectangle([x - 18, yy - 10, x + w + 18, yy + h + 10],
+                                     radius=8, fill=pill[:3])
+        box = self.text((x, yy), text, f, color or (226, 224, 236), "l", vtop=True)
+        self.reserved_bottom.append([int(box[0]), int(box[1]),
+                                     int(box[2] - box[0]), int(box[3] - box[1])])
+        return box
+
     # ── reference-video window ───────────────────────────────────────────
     def window(self, name: str, x: int, y: int, w: int, h: int, *,
                label: str | None = "참고 영상", border=None, fill=(8, 8, 10),
@@ -281,7 +303,7 @@ class Card:
         p.parent.mkdir(parents=True, exist_ok=True)
         self._warn_if_no_headline(p.name)
         self.im.save(p)
-        if self.windows:
+        if self.windows or self.reserved_bottom:
             sidecar = p.with_suffix("").with_suffix(".windows.json")
             existing = {}
             if sidecar.exists():
@@ -290,5 +312,7 @@ class Card:
                 except Exception:
                     existing = {}
             existing.update(self.windows)
+            if self.reserved_bottom:
+                existing["_reserved_bottom"] = self.reserved_bottom
             sidecar.write_text(json.dumps(existing, ensure_ascii=False))
         return str(p)

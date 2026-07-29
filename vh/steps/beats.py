@@ -22,6 +22,11 @@ The shape that survived ~20 episodes and is encoded here:
   source, so they are an argument, not a constant.
 * **Credit on every quoted frame.** A quoted clip without an on-screen source
   line is not publishable; `credit` renders bottom-left for the beat's duration.
+  It is pinned to the SCREEN, while a gfx card drifts under the Ken Burns zoom —
+  so a card that prints its own source line (`cardkit.Card.source`) would collide
+  with it mid-beat. When the card's sidecar says it does, this module skips its
+  own credit overlay and says so; put the source on the card OR in `credit`, not
+  both.
 * **Cold-open eyecatch.** `eyecatch=True` on the first beat renders a big centred
   punch line over the shot — the 1-second hook that decides retention.
 
@@ -45,9 +50,10 @@ import hashlib
 import json
 import os
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .. import config
+from ..qc import lint_vo
 from . import news
 
 FONT_BOLD = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
@@ -209,6 +215,7 @@ def build_beat_short(
     final_encode: str = "reencode",
     ref_video: dict | None = None,
     lint_script: bool = True,
+    dry_run: bool = False,
 ) -> dict:
     """Assemble a beat-driven Short. Returns {final, duration, vo, segments}.
 
@@ -238,6 +245,13 @@ def build_beat_short(
     lint_script  run qc.lint_vo on each beat's text before synthesis and print
               warnings (digits / native-counter readings / ambiguous day forms).
               Warnings only; set False to silence.
+    dry_run   synthesize the VO and return the LENGTHS only — no segments, no
+              concat, no encode: {dry_run, total, beats:[{bid, kind, vo, seg,
+              lint}], outro, lint}. A beat's length is however long edge-tts takes
+              to read it, which is hard to guess, so use this to fit the 3-minute
+              ceiling by editing the SCRIPT (zero re-encodes) before building
+              once. The per-beat `seg` values are also what a generated diagram's
+              framerate should be matched to.
 
     Segment length is VO length + pad, so a clip must have at least that much
     material left after its in-point — asserted per beat rather than silently
@@ -260,13 +274,19 @@ def build_beat_short(
     # Window rectangles come from each card's sidecar (written by Card.save), so
     # the renderer and the assembler never share coordinates in code.
     windows: dict = {}
-    for name in ref_video:
+    card_draws_source: set = set()
+    for name in {*ref_video, *(b.visual for b in beats if b.kind == "gfx")}:
         sc = gfx / f"{name}.windows.json"
-        if sc.exists():
-            try:
-                windows.update(json.loads(sc.read_text()))
-            except Exception:
-                pass
+        if not sc.exists():
+            continue
+        try:
+            data = json.loads(sc.read_text())
+        except Exception:
+            continue
+        if data.pop("_reserved_bottom", None):
+            # The card drew its own bottom source line (cardkit Card.source).
+            card_draws_source.add(name)
+        windows.update(data)
     missing = [n for n in ref_video if n not in windows]
     if missing:
         raise ValueError(
@@ -304,7 +324,6 @@ def build_beat_short(
     if lint_script:
         # Read the script BEFORE spending a synthesis on it — whisper normalises
         # what it hears, so some mis-readings can never show up in a transcript.
-        from ..qc import lint_vo
         for b in beats:
             for w in lint_vo(b.text or ""):
                 print(f"[vo-lint] {b.id} {w['kind']}: {w['match']} — {w['note']}")
@@ -319,6 +338,26 @@ def build_beat_short(
         new_vo[b.id] = key
     vo_cache_path.write_text(json.dumps(new_vo))
 
+    if dry_run:
+        # Length-only pass: the VO is what decides every beat's length, and a
+        # Short has a hard 3-minute ceiling — so answer "how long will this be?"
+        # without rendering a single frame. Trimming the script from here costs
+        # zero re-encodes (a full build, even final_encode="copy", still renders
+        # every segment).
+        beat_rows, total = [], 0.0
+        for b in beats:
+            vd = _dur(wd / "vo" / f"{b.id}.mp3")
+            sd = round(vd + (pad_gfx if b.kind == "gfx" else pad_clip), 3)
+            beat_rows.append({"bid": b.id, "kind": b.kind, "vo": round(vd, 3),
+                              "seg": sd,
+                              "lint": lint_vo(b.text or "") if lint_script else []})
+            total += sd
+        if outro:
+            total += outro_dur
+        return {"dry_run": True, "total": round(total, 2), "beats": beat_rows,
+                "outro": outro_dur if outro else 0.0,
+                "lint": [w for r in beat_rows for w in r["lint"]]}
+
     # 2. one video segment per beat, sized by its VO
     segs = []
     for b in beats:
@@ -326,7 +365,18 @@ def build_beat_short(
         vd = _dur(vo)
         sd = round(vd + (pad_gfx if b.kind == "gfx" else pad_clip), 3)
         nf = int(sd * fps)
-        ov = _overlay(b, wd / f"ov_{b.id}.png", W, H, accent, font_bold, font_regular)
+        ob = b
+        if b.kind == "gfx" and b.credit and b.visual in card_draws_source:
+            # The card already prints its own source line, and our credit overlay
+            # is pinned to the SCREEN while the card drifts under the Ken Burns
+            # zoom — so the two collide part-way through the beat (visible only in
+            # some frames). Let the card's own line stand.
+            print(f"[beats] {b.id}: card {b.visual!r} draws its own source line, "
+                  f"so the beat's credit is skipped (a fixed overlay would drift "
+                  f"into it as the card zooms). Remove `credit` for this beat, or "
+                  f"drop Card.source() from the card.")
+            ob = replace(b, credit=None)
+        ov = _overlay(ob, wd / f"ov_{b.id}.png", W, H, accent, font_bold, font_regular)
         seg = wd / f"seg_{b.id}.mp4"
 
         fp = _seg_fingerprint(b, sd, ov, gfx=gfx, clips=clips, precrop=precrop,
@@ -359,6 +409,19 @@ def build_beat_short(
                     f"{have:.2f}s left after in-point {rat}s but the window must run "
                     f"{sd:.2f}s — grab a longer source (~75s) or pick an earlier "
                     f"in-point.")
+                # The opposite direction used to pass silently: a source much
+                # longer than the beat renders only its head, so a GENERATED
+                # diagram whose payoff lands at the end never reaches the screen
+                # (that shipped in several episodes). A quoted broadcast clip is
+                # legitimately long, hence a warning, not an assert.
+                if have > sd * 2:
+                    print(f"[beats] {b.id}: reference "
+                          f"{pathlib.Path(str(rsrc)).name!r} has {have:.1f}s after "
+                          f"the in-point but the window only shows {sd:.1f}s "
+                          f"({sd / have * 100:.0f}%) — the last {have - sd:.1f}s never "
+                          f"render. Fine for a quoted clip; if this is a generated "
+                          f"diagram, match its framerate/length to the beat "
+                          f"(fps = frames / {sd:.1f}s).")
                 vf = (f"[1:v]scale={rw}:{rh}:force_original_aspect_ratio=decrease,"
                       f"pad={rw}:{rh}:(ow-iw)/2:(oh-ih)/2:color=0x08080a,"
                       f"setsar=1,fps={fps}[win];"
