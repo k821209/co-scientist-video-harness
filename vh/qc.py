@@ -11,6 +11,12 @@ seconds, and both are meant to be *read*, not just run:
   script you meant to say. Catches a truncated VO, a mis-muxed audio track, or a
   beat whose narration never made it in. ≥0.93 is normal for Korean TTS
   (proper nouns always mis-transcribe); a sudden drop means something is wrong.
+- `lint_copy()` → read the WHOLE script for sentences that do not stand up: a
+  counterpart deleted while tightening ("proposed to whom?"), a pronoun with
+  nothing to point at, a lone small figure among 억/조 ones that whisper gets
+  dragged towards. lint_vo reads HOW a line is spoken and narration_match
+  compares SOUNDS; neither asks whether the sentence makes sense, and episodes
+  shipped that passed both.
 - `narration_drift()` → transcribe a REFERENCE audio and the OUTPUT and diff
   those two. For stages that regenerate the voice (generative lip-sync, voice
   conversion), where the words themselves can change — a wrong date reads as a
@@ -33,6 +39,170 @@ from . import config
 # you wrote and the check passes. "7번" read as "일곱 번" (native Korean numeral
 # instead of Sino-Korean) transcribed as "7번" and looked perfect — a listener
 # caught it. Reading the script BEFORE synthesis is the only systematic defence.
+
+# ── whole-script copy check ────────────────────────────────────────────────
+#
+# lint_vo reads HOW a line will be spoken. narration_match compares SOUNDS.
+# Neither asks whether the sentence makes sense, and an episode shipped that
+# passed both: a listener asked "proposed to WHOM?" — the person being proposed
+# to had been compressed out of the script entirely — and then "reconciled with
+# whom, everyone's dead?". Both were the same mistake, a counterpart deleted
+# while tightening, and both are obvious to a human on the first read.
+#
+# The other trap needs the WHOLE script, which is why this cannot live in
+# lint_vo. A share price read as "삼만 육천구백 원" transcribed as `36,900억 원`
+# — not a mis-pronunciation, a mis-HEARING pulled by context: earlier beats were
+# all in 억 원, so whisper followed them. The offending sentence and the beats
+# that dragged it were in DIFFERENT beats, and a per-beat check cannot see
+# across that gap however good its rules are.
+#
+# Rules, lexicons and thresholds come from a report that shipped a working
+# implementation and, more usefully, the scripts that broke — including two
+# traps it had already fallen into (see the ★ notes below). Warnings only, and
+# the wording says so: these point at risky places, they do not judge. One real
+# episode's 28만 1500원 gets flagged and transcribed perfectly.
+
+# Words that need a second party to mean anything.
+_RELATION_WORDS = (
+    "청혼", "구혼", "화해", "맹약", "결혼", "재회", "복수", "배상", "합의",
+    "협상", "동맹", "항복", "사과", "이혼", "대결", "결별", "고백", "계약",
+    "교전", "휴전", "화친",
+)
+# Something that can BE the second party.
+_PERSONISH = (
+    "아내", "남편", "아버지", "어머니", "아들", "딸", "형", "동생", "왕", "왕비",
+    "신", "여신", "사람", "남자", "여자", "친척", "가족", "상대", "양쪽", "양측",
+    "서로", "쌍방", "두 나라", "두 사람", "사이",
+)
+# The lexicon is matched with Hangul boundaries, NOT with `in`. A plain
+# substring test matches 아들 inside 받아들였습니다 and 신 inside 정신, and each
+# one SILENCES a warning — the failure runs the wrong way here. The report's own
+# implementation guards the pronoun rule this way and not this one; caught by a
+# test written against a script that should have been flagged.
+_PERSON_RX = re.compile(
+    "|".join(rf"(?<![가-힣]){re.escape(p)}"
+             r"(?:(?![가-힣])|(?=은|는|이|가|을|를|의|도|만|과|와|에|들|님|께))"
+             for p in _PERSONISH))
+
+# ★ 와/과/랑/하고 are NOT usable as counterpart markers. They are also verb
+#   endings — "오디세우스는 돌아**와** 문을 잠그고" — and including them let the
+#   very script that caused this check pass. Only the unambiguous ones.
+_COUNTERPART_RX = re.compile(r"[가-힣]{2,}(?:에게|한테)\s")
+
+# Pronouns that need an antecedent. Discourse markers that merely LOOK like them
+# (그런/그때) are left out: they are a false-positive mine.
+_DEICTIC = ("그들", "그것", "그는", "그를", "그의", "그녀", "거기", "그쪽",
+            "이들", "이것", "저들")
+# Any noun with a case particle counts as a candidate antecedent.
+_NOUNISH_RX = re.compile(r"[가-힣]{2,}(?:은|는|이|가|을|를|의|도|만)\s")
+
+# ★ Do not strip the unit off the END of a money phrase: the numeral part
+#   swallows 조 and "백십조 원" reads as a 원-scale figure. Capture the whole
+#   numeral and take the LARGEST unit character inside it.
+_NUMERAL = r"(?:[0-9,]|[일이삼사오육칠팔구십백천만억조])+"
+# Spaces inside a numeral are part of it — "삼만 육천구백 원" was being read as
+# just "육천구백 원".
+_MONEY_RX = re.compile(rf"({_NUMERAL}(?:\s{_NUMERAL})*)\s*원")
+_SENTENCE_RX = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _money_scale(numeral: str) -> int:
+    """Largest unit inside a numeral: 4=조, 3=억, 2=만, 1=below."""
+    if "조" in numeral:
+        return 4
+    if "억" in numeral:
+        return 3
+    return 2 if "만" in numeral else 1
+
+
+def _sentences(text: str) -> list[str]:
+    return [s.strip() for s in _SENTENCE_RX.split(text) if s.strip()]
+
+
+def lint_copy(
+    beats,
+    *,
+    names: tuple[str, ...] = (),
+    window: int = 1,
+) -> list[dict]:
+    """Read the WHOLE script for sentences that do not stand up.
+
+    `beats` is the script: a list of beat objects with `.text`, a list of
+    strings, or one string. Whole-script on purpose — the money rule compares
+    figures ACROSS beats, which is where the real failure was.
+
+    `names` are proper nouns that appear in the episode (characters, places);
+    passing them removes counterpart false positives.
+
+    Returns [{kind, match, note, sentence}] — warnings, never raises. A hit is a
+    place worth re-reading, not a verdict: a correct 28만 1500원 in an episode
+    otherwise counted in 억 is flagged, and should be.
+    """
+    if isinstance(beats, str):
+        text = beats
+    else:
+        parts = []
+        for b in beats:
+            parts.append(b if isinstance(b, str) else (getattr(b, "text", "") or ""))
+        text = " ".join(p for p in parts if p)
+    sents = _sentences(text)
+    out: list[dict] = []
+
+    for i, s in enumerate(sents):
+        back = " ".join(sents[max(0, i - window):i])
+        both = f"{back} {s} "
+
+        for w in _RELATION_WORDS:
+            if w not in s:
+                continue
+            if (_PERSON_RX.search(both)
+                    or _COUNTERPART_RX.search(both)
+                    or any(n in both for n in names)):
+                continue
+            out.append({
+                "kind": "no_counterpart", "match": w, "sentence": s,
+                "note": (f"'{w}' needs a second party and none is named in this "
+                         f"sentence or the {window} before it — the listener asks "
+                         f"'with whom?'"),
+            })
+
+        for w in _DEICTIC:
+            # ★ Substring guard: '리그의' matched '그의'.
+            if not re.search(r"(?<![가-힣])" + w, s):
+                continue
+            if i == 0:
+                out.append({
+                    "kind": "no_antecedent", "match": w, "sentence": s,
+                    "note": f"the script opens on '{w}' — there is nothing for it to point at",
+                })
+            elif not _NOUNISH_RX.search(f"{back} "):
+                out.append({
+                    "kind": "no_antecedent", "match": w, "sentence": s,
+                    "note": f"'{w}' has no noun to refer back to in the previous sentence",
+                })
+
+    # Money scale, across the whole script. A lone small figure among 억/조 ones
+    # is where whisper gets dragged — the sentence itself is fine, its NEIGHBOURS
+    # are the problem, which is exactly what a per-beat lint cannot see.
+    big, small = [], []
+    for i, s in enumerate(sents):
+        for m in _MONEY_RX.finditer(s):
+            (big if _money_scale(m.group(1)) >= 3 else small).append((i, s, m.group(0).strip()))
+    if big and small:
+        seen = set()
+        for i, s, tok in small:
+            if (i, tok) in seen:
+                continue
+            seen.add((i, tok))
+            out.append({
+                "kind": "money_scale_mix", "match": tok, "sentence": s,
+                "note": (f"the script counts in 억/조 in {len(big)} place(s) but this "
+                         f"one is '{tok}' — whisper follows context and has "
+                         f"transcribed exactly this as an 억 figure. Take the precise "
+                         f"number out of the VO and leave it on the card"),
+            })
+    return out
+
 
 # Counters that pull the NATIVE reading out of a digit ("7번" → "일곱 번").
 _COUNTERS = "번|년|위|명|개|회|주|층|살|권|장|마리|대|잔|칸|줄"

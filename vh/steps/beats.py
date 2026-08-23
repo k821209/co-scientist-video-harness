@@ -53,7 +53,7 @@ import subprocess
 from dataclasses import dataclass, replace
 
 from .. import config
-from ..qc import lint_vo
+from ..qc import lint_copy, lint_vo
 from . import news
 
 FONT_BOLD = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
@@ -327,6 +327,13 @@ def build_beat_short(
         for b in beats:
             for w in lint_vo(b.text or ""):
                 print(f"[vo-lint] {b.id} {w['kind']}: {w['match']} — {w['note']}")
+        # ...and read the script as a WHOLE. Two of these can only be seen from
+        # here: a counterpart deleted while tightening, and a lone small figure
+        # among 억/조 ones that whisper will be dragged towards. Both shipped in
+        # episodes that passed the per-beat lint and narration_match.
+        for w in lint_copy(beats):
+            print(f"[copy-lint] {w['kind']}: {w['match']} — {w['note']}")
+            print(f"            {w['sentence'][:90]}")
     for b in beats:
         mp3 = wd / "vo" / f"{b.id}.mp3"
         key = hashlib.sha1(
