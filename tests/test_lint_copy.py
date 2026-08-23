@@ -112,3 +112,41 @@ def test_a_real_kinship_word_still_clears_it():
                    "두 사람은 화해했습니다.",
                    "양쪽이 맹약을 맺었습니다."):
         assert qc.lint_copy(script) == [], script
+
+
+def test_a_relation_word_buried_in_a_compound_does_not_fire():
+    # The mirror image of the kinship bug, and the one this fix left behind:
+    # PERSON was boundary-guarded and RELATION was not. 자유계약선수 is not a
+    # contract with anybody and 손해배상보험 is not a settlement with anybody.
+    for script in ("구단은 자유계약선수 세 명을 데려왔습니다.",
+                   "손해배상보험에 가입했습니다.",
+                   "결혼정보회사를 통해 만났습니다."):
+        assert [h for h in qc.lint_copy(script)
+                if h["kind"] == "no_counterpart"] == [], script
+
+
+def test_a_prefixed_relation_word_still_fires():
+    # ★ Why the guard is on the TAIL and not the head: a leading (?<![가-힣])
+    # would kill 재계약, which is a real relation word with a real prefix — and
+    # killing a relation word SILENCES the check, the direction that matters.
+    assert [h["match"] for h in qc.lint_copy("재계약을 맺었습니다.")] == ["계약"]
+    # A derived noun that still carries the relation counts too: 청혼자 is one
+    # of the two real defects in the shipped script.
+    assert [h["match"] for h in qc.lint_copy("청혼자 백여덟 명이 몰려왔습니다.")] \
+        == ["청혼"]
+
+
+def test_a_one_syllable_counterpart_is_a_counterpart():
+    # "세 명에게" names who it was, and was being missed because 명 is a single
+    # syllable and the marker required two. 에게/한테 are datives — whatever
+    # precedes them IS the second party, however short.
+    assert qc.lint_copy("구단은 세 명에게 백억 원을 썼습니다. 계약을 맺었습니다.") == []
+    assert qc.lint_copy("그에게 사과했습니다.") == []
+
+
+def test_the_lotte_false_positive_is_gone():
+    # From a whole-catalogue run over 14 episodes: the only counterpart hit, and
+    # it was wrong. The sentence names its counterpart twice over.
+    script = ("감독은 그사이 네 번 바뀌었고, 이천이십삼년 초에는 외부 자유계약선수 "
+              "세 명에게 백칠십억 원을 썼습니다.")
+    assert [h for h in qc.lint_copy(script) if h["kind"] == "no_counterpart"] == []

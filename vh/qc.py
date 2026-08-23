@@ -63,6 +63,20 @@ from . import config
 # episode's 28만 1500원 gets flagged and transcribed perfectly.
 
 # Words that need a second party to mean anything.
+#
+# Guarded on the TRAILING side only, and the asymmetry with _PERSON_RX is the
+# point. A leading `(?<![가-힣])` would kill 재계약 — a real relation word with a
+# real prefix — and killing a relation word SILENCES the check, which is the
+# direction that matters. Guarding the tail instead asks whether the word is
+# acting as itself: 계약을/계약했/청혼자 are, the 계약 buried in 자유계약선수 and
+# the 배상 in 손해배상보험 are not.
+#
+# _PERSON_RX keeps its leading guard for the mirror-image reason: a missed
+# person is a false POSITIVE, which is noise, while 정신/자신/신라 matching 신
+# would silence. Same trap, opposite guards, because the two rules fail in
+# opposite directions.
+_RELATION_TAIL = (r"(?=을|를|이|가|은|는|과|와|도|만|에|의|하|했|합|한|할|해|함"
+                  r"|서|자|까지|부터|보다|라도|이나)")
 _RELATION_WORDS = (
     "청혼", "구혼", "화해", "맹약", "결혼", "재회", "복수", "배상", "합의",
     "협상", "동맹", "항복", "사과", "이혼", "대결", "결별", "고백", "계약",
@@ -87,7 +101,10 @@ _PERSON_RX = re.compile(
 # ★ 와/과/랑/하고 are NOT usable as counterpart markers. They are also verb
 #   endings — "오디세우스는 돌아**와** 문을 잠그고" — and including them let the
 #   very script that caused this check pass. Only the unambiguous ones.
-_COUNTERPART_RX = re.compile(r"[가-힣]{2,}(?:에게|한테)\s")
+# {1,} not {2,}: "세 명에게" names a counterpart and was being missed because
+# 명 is one syllable. 에게/한테 mark a dative — whatever precedes them IS the
+# second party, however short.
+_COUNTERPART_RX = re.compile(r"[가-힣]+(?:에게|한테)")
 
 # Pronouns that need an antecedent. Discourse markers that merely LOOK like them
 # (그런/그때) are left out: they are a false-positive mine.
@@ -153,7 +170,7 @@ def lint_copy(
         both = f"{back} {s} "
 
         for w in _RELATION_WORDS:
-            if w not in s:
+            if not re.search(re.escape(w) + _RELATION_TAIL, s):
                 continue
             if (_PERSON_RX.search(both)
                     or _COUNTERPART_RX.search(both)
