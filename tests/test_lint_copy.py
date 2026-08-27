@@ -150,3 +150,57 @@ def test_the_lotte_false_positive_is_gone():
     script = ("감독은 그사이 네 번 바뀌었고, 이천이십삼년 초에는 외부 자유계약선수 "
               "세 명에게 백칠십억 원을 썼습니다.")
     assert [h for h in qc.lint_copy(script) if h["kind"] == "no_counterpart"] == []
+
+
+def test_a_reciprocal_suffix_names_the_parties():
+    # X끼리 says X are themselves the two sides, the way 에게/한테 say whatever
+    # precedes them is the second one. Safe in a way 와/과 are not: no verb
+    # ending is spelled 끼리, so the 돌아**와** trap has no equivalent here.
+    for script in ("두 나라끼리 합의했습니다.",
+                   "투자사들끼리의 합의가 있었습니다.",
+                   "선수들끼리 화해했습니다."):
+        assert [h for h in qc.lint_copy(script)
+                if h["kind"] == "no_counterpart"] == [], script
+
+
+def test_one_syllable_before_끼리_is_not_a_reciprocal():
+    # ★ The counterexample the report asked for. This addition SILENCES
+    # warnings, so a stray substring match costs a real defect, not noise —
+    # the same asymmetry that made 아들-inside-받아들였습니다 worth fixing.
+    # 토끼리 is not Korean (it would be 토끼끼리), and requiring two syllables
+    # before the suffix is what keeps it from quietly clearing the check.
+    assert [h["kind"] for h in qc.lint_copy("토끼리 뛰어놀다 합의했습니다.")] \
+        == ["no_counterpart"]
+
+
+def test_a_noun_that_contains_both_parties_needs_no_counterpart():
+    # 노사 IS labour and management; asking "with whom?" asks something the
+    # sentence already answered. These are ordinary words in news copy, so the
+    # warning fired regularly on correct scripts.
+    for script in ("양국이 합의했습니다.",
+                   "노사가 합의했습니다.",
+                   "남북이 합의했습니다.",
+                   "여야가 합의했습니다.",
+                   "남북한이 합의했습니다.",
+                   "한미 협상이 타결됐습니다."):
+        assert [h for h in qc.lint_copy(script)
+                if h["kind"] == "no_counterpart"] == [], script
+
+
+def test_a_reciprocal_adverb_clears_it():
+    # 상호/양자 are not people, but they do assert there are two sides, which is
+    # all this check asks for.
+    for script in ("상호 합의했습니다.", "양자 합의했습니다."):
+        assert [h for h in qc.lint_copy(script)
+                if h["kind"] == "no_counterpart"] == [], script
+
+
+def test_the_new_vocabulary_does_not_silence_through_a_substring():
+    # Each of these contains one of the added words and means something else.
+    # They must still fire, or the additions bought false positives with
+    # silence — 양사언 is a person, 상호명 is a trade name, 남북로 is a road.
+    for script in ("양사언이 화해했습니다.",
+                   "상호명을 두고 합의했습니다.",
+                   "남북로에서 대결이 벌어졌습니다.",
+                   "상호작용을 두고 협상했습니다."):
+        assert [h["kind"] for h in qc.lint_copy(script)] == ["no_counterpart"], script

@@ -87,6 +87,15 @@ _PERSONISH = (
     "아내", "남편", "아버지", "어머니", "아들", "딸", "형", "동생", "왕", "왕비",
     "신", "여신", "사람", "남자", "여자", "친척", "가족", "상대", "양쪽", "양측",
     "서로", "쌍방", "두 나라", "두 사람", "사이",
+    # Words that carry BOTH parties inside one noun: 노사 is labour and
+    # management, 여야 is government and opposition. Asking "with whom?" of
+    # 노사가 합의했다 is asking a question the sentence already answered, and in
+    # news copy these are ordinary words, so the warning fired regularly.
+    "양국", "노사", "남북", "남북한", "여야", "여야정", "양당", "양사", "양국가",
+    "한미", "한일", "미중", "북미", "노정", "학부모",
+    # Adverbs that assert reciprocity without naming anyone. 상호/양자 are not
+    # people, but they do say there are two sides, which is all this check asks.
+    "상호", "양자",
 )
 # The lexicon is matched with Hangul boundaries, NOT with `in`. A plain
 # substring test matches 아들 inside 받아들였습니다 and 신 inside 정신, and each
@@ -104,7 +113,20 @@ _PERSON_RX = re.compile(
 # {1,} not {2,}: "세 명에게" names a counterpart and was being missed because
 # 명 is one syllable. 에게/한테 mark a dative — whatever precedes them IS the
 # second party, however short.
-_COUNTERPART_RX = re.compile(r"[가-힣]+(?:에게|한테)")
+# 끼리 is a reciprocal suffix: X끼리 means X are themselves the two parties, the
+# way 에게/한테 mean whatever precedes them is the second one. Unlike 와/과 it
+# is safe, because no verb ending is spelled 끼리 — the trap that made 와/과
+# unusable does not exist here.
+#
+# {2,} and a tail guard, not a bare 끼리: this addition SILENCES warnings, so a
+# stray substring match costs a real defect rather than a bit of noise — the
+# same asymmetry that made 아들-inside-받아들였습니다 the bug worth fixing. One
+# syllable before it is where the accidents live (토끼리), and requiring two
+# leaves the genuine uses (투자사들끼리, 두 나라끼리) untouched.
+_COUNTERPART_RX = re.compile(
+    r"[가-힣]+(?:에게|한테)"
+    r"|[가-힣]{2,}끼리(?![가-힣])"
+    r"|[가-힣]{2,}끼리(?=의|가|는|도|만|서|를|와|과|에)")
 
 # Pronouns that need an antecedent. Discourse markers that merely LOOK like them
 # (그런/그때) are left out: they are a false-positive mine.
