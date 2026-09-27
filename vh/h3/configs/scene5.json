@@ -1,0 +1,38 @@
+{
+  "first": "krea_drift_A.png",
+  "w": 768,
+  "h": 1152,
+  "length": 124,
+  "seed": 20260926,
+  "args": [
+    "--turbo-lora",
+    "minimax_h3_taomate_3step_lora_avg_rank_19_bf16.safetensors",
+    "--steps",
+    "3",
+    "--style",
+    "hm:0.7"
+  ],
+  "start_pose": "she is seated at the wooden table, both hands resting near the white coffee cup on its saucer, the small notebook closed beside it, looking at the camera with a soft smile",
+  "shots": [
+    {
+      "prompt": "Camera at seated eye level, completely static, no zoom, no dolly. Cozy cafe interior during daytime, other customers blurred in the background, soft natural window light. The adult woman from the reference, in her late twenties, wearing the same cream-colored knit sweater over a white shirt and dark trousers, seated at the wooden table. She wraps her hand around the white coffee cup and slowly lifts it toward her mouth. Audio: cafe ambience, soft chatter.",
+      "last_pose": "she is seated holding the white coffee cup with both hands just at her lips, eyes lowered toward the cup, the small notebook still closed on the table"
+    },
+    {
+      "prompt": "Camera at seated eye level, completely static, no zoom, no dolly. Cozy cafe interior during daytime, other customers blurred in the background, soft natural window light. The adult woman from the reference, in her late twenties, wearing the same cream-colored knit sweater over a white shirt and dark trousers, holding the cup at her lips. She takes one slow sip, keeping the cup in her hands. Audio: cafe ambience.",
+      "last_pose": "she is seated holding the white cup with both hands just below her chin after a sip, eyes toward the camera, the notebook still closed"
+    },
+    {
+      "prompt": "Camera at seated eye level, completely static, no zoom, no dolly. Cozy cafe interior during daytime, other customers blurred in the background, soft natural window light. The adult woman from the reference, in her late twenties, wearing the same cream-colored knit sweater over a white shirt and dark trousers, holding the cup below her chin. She lowers the cup and sets it back down on the saucer, releasing it. She says: <d>[Korean] 여기 커피 정말 맛있네요.</d> Audio: cup on saucer, cafe ambience.",
+      "last_pose": "she is seated with the white cup back on its saucer and both hands resting on the table beside it, the notebook still closed, looking at the camera"
+    },
+    {
+      "prompt": "Camera at seated eye level, completely static, no zoom, no dolly. Cozy cafe interior during daytime, other customers blurred in the background, soft natural window light. The adult woman from the reference, in her late twenties, wearing the same cream-colored knit sweater over a white shirt and dark trousers, seated with the cup on its saucer. She opens the small notebook in front of her, one hand flattening the page. She says: <d>[Korean] 오늘 할 일이 좀 많아요.</d> Audio: page turning, cafe ambience.",
+      "last_pose": "she is seated with the notebook open in front of her, her right hand resting flat on the open page, looking down at the page"
+    },
+    {
+      "prompt": "Camera at seated eye level, completely static, no zoom, no dolly. Cozy cafe interior during daytime, other customers blurred in the background, soft natural window light. The adult woman from the reference, in her late twenties, wearing the same cream-colored knit sweater over a white shirt and dark trousers, seated with the notebook open. She lifts her head to look at the camera and settles into a soft smile. She says: <d>[Korean] 그래도 커피 한 잔이면 괜찮아요.</d> Audio: cafe ambience.",
+      "last_pose": "she is seated facing the camera with a soft smile, the notebook open and her hand resting on the page"
+    }
+  ]
+}

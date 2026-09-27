@@ -30,9 +30,10 @@ gpu = ["transformers>=4.40", "numpy"]
 vh = "vh.cli:main"
 
 [tool.setuptools]
-packages = ["vh", "vh.steps", "vh.assets"]
+packages = ["vh", "vh.steps", "vh.assets", "vh.h3"]
 
 # Ship the packaged base style catalog (vh/assets/*.json) inside the wheel —
 # vh.style_gallery loads it via importlib.resources("vh.assets").
 [tool.setuptools.package-data]
+"vh.h3" = ["configs/*.json", "README.md"]
 "vh.assets" = ["*.json"]

@@ -1,0 +1,30 @@
+{
+  "krea_ref": "h3anchor.png",
+  "krea_prompt": "Keep her face and hairstyle exactly the same. Change the setting to a park bench under autumn trees in the late afternoon, blurred path and fallen leaves in the background, warm low sunlight. She wears a beige wool coat over a white knit top and sits on the bench with an open paperback book resting on her lap, both hands on the book. Waist-up composition, soft warm daylight.",
+  "w": 768,
+  "h": 1152,
+  "seed": 20260927,
+  "args": [
+    "--turbo-lora",
+    "minimax_h3_taomate_3step_lora_avg_rank_19_bf16.safetensors",
+    "--steps",
+    "3",
+    "--style",
+    "hm:0.7"
+  ],
+  "start_pose": "she is seated on the bench with an open paperback book on her lap, both hands on the book, eyes down on the page",
+  "shots": [
+    {
+      "prompt": "Camera at seated eye level, completely static, no zoom, no dolly. A park bench under autumn trees in the late afternoon, blurred path and fallen leaves behind, warm low sunlight. The adult woman from the reference, in her late twenties, wearing a beige wool coat over a white knit top, seated on the bench reading. She closes the paperback book with both hands and rests it flat on her lap. Audio: park ambience, rustling leaves.",
+      "last_pose": "she is seated with the closed paperback book flat on her lap, both hands resting on its cover, eyes still down toward the book"
+    },
+    {
+      "prompt": "Camera at seated eye level, completely static, no zoom, no dolly. A park bench under autumn trees in the late afternoon, blurred path and fallen leaves behind, warm low sunlight. The adult woman from the reference, in her late twenties, wearing a beige wool coat over a white knit top, seated with the closed book on her lap. She lifts her head and looks at the camera. She says: <d>[Korean] 여기 앉아 있으면 시간 가는 줄 몰라요.</d> Audio: park ambience.",
+      "last_pose": "she is seated facing the camera with the closed book on her lap, both hands on the cover, a calm expression"
+    },
+    {
+      "prompt": "Camera at seated eye level, completely static, no zoom, no dolly. A park bench under autumn trees in the late afternoon, blurred path and fallen leaves behind, warm low sunlight. The adult woman from the reference, in her late twenties, wearing a beige wool coat over a white knit top, seated facing the camera. She smiles softly and tilts her head a little. She says: <d>[Korean] 가을이 제일 좋은 계절이에요.</d> Audio: park ambience, distant birds.",
+      "last_pose": "she is seated facing the camera with a soft smile, head tilted slightly, the closed book on her lap"
+    }
+  ]
+}
