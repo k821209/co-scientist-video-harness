@@ -175,14 +175,23 @@ def blur(name, radius):
     return dst
 
 
-def krea(src, prompt, dst_name, seed, aspect):
+def krea(src, prompt, dst_base, seed, aspect):
     """Krea2 Edit. 프롬프트는 **명령형 편집 지시**여야 한다(서술형이면 인물이 복제된다).
 
     ★앵커에서 '새로 그리는' 단계는 제외 지시를 무시하고, 기존 이미지를 '편집하는' 단계는
     따른다(실측: 셀카 팔 제거를 시작 이미지에서 3회 연속 실패, 편집본에서는 3회 다 성공).
-    빼야 할 것이 있으면 시작 이미지를 깨끗한 경계 한 장에서 편집해 만들 것."""
+    빼야 할 것이 있으면 시작 이미지를 깨끗한 경계 한 장에서 편집해 만들 것.
+
+    ★출력 이름은 **입력에 대해 결정적**이다: `<dst_base>_<hash(src 내용, prompt, seed,
+    aspect)>.png`. 같은 입력이면 재사용(키프레임 30초를 다시 안 뽑음), 입력이 하나라도
+    다르면 다른 이름이라 옛 그림이 들어올 수 없다. 이름을 `--out` 과 번호만으로 지었을 때
+    같은 `--out` 의 다른 씬이 만든 8장을 조용히 재사용했다(피드백 676db177a597) — stage()
+    가 바깥 파일에 하는 것과 같은 원리를 스크립트가 만드는 파일에도 적용한 것."""
+    src_digest = hashlib.md5(open(f"{IN}/{src}", "rb").read()).hexdigest()
+    key = hashlib.md5(f"{src_digest}|{prompt}|{seed}|{aspect}".encode()).hexdigest()[:8]
+    dst_name = f"{dst_base}_{key}.png"
     if os.path.exists(f"{IN}/{dst_name}"):
-        print(f"   재사용 {dst_name}")
+        print(f"   재사용 {dst_name} (같은 입력)")
         return dst_name
     print(f"   [KREA] {dst_name} <- {src}: {prompt[:70]!r}…")
     r = subprocess.run([PY, f"{DOCS}/krea2_edit.py", f"{IN}/{src}", prompt,
@@ -208,8 +217,8 @@ def boundaries(cfg, out):
     shot["last_image"] 가 있으면 그 이미지를 그대로 경계로 쓴다."""
     w, h, asp = cfg.get("w", 768), cfg.get("h", 1152), aspect_of(cfg)
     if cfg.get("krea_ref"):
-        start = krea(cfg["krea_ref"], cfg["krea_prompt"], f"{out}_start.png",
-                     int(cfg.get("seed", 777)), asp)
+        start = krea(stage(cfg["krea_ref"]) if os.path.sep in cfg["krea_ref"] else cfg["krea_ref"],
+                     cfg["krea_prompt"], f"{out}_start", int(cfg.get("seed", 777)), asp)
     else:
         start = stage(cfg["first"]) if os.path.sep in cfg["first"] else cfg["first"]
     start = fit(start, w, h)
@@ -223,7 +232,7 @@ def boundaries(cfg, out):
             bs.append(None)                      # 마지막 조각은 끝 목표 없이 둘 수 있다
             continue
         bs.append(fit(krea(start, shot.get("last_prompt") or (KEEP + pose),
-                           f"{out}_b{i+1}.png", int(cfg.get("seed", 777)) + 100 + i, asp), w, h))
+                           f"{out}_b{i+1}", int(cfg.get("seed", 777)) + 100 + i, asp), w, h))
     return [f"{IN}/{b}" if b else None for b in bs]
 
 
