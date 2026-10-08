@@ -350,11 +350,17 @@ def graded(out, i, anchor):
     return gl
 
 
-def anchor_for(cfg, out, start_png):
-    """톤 기준. 씬의 시작 이미지에서 한 번만 뽑는다."""
+def anchor_for(cfg, out, start_name):
+    """톤 기준. 씬의 시작 이미지에서 한 번만 뽑는다.
+
+    `start_name` 은 **이미 IN/ 안에 들여놓인 basename** 이어야 한다(= stage() 가 돌려준 것).
+    바깥 경로를 받아 basename 을 떼어 쓰면 안 된다 — stage() 가 내용 해시로 이름을 바꿔
+    넣기 때문에 원래 이름은 IN/ 에 존재하지 않는다. 그 조립이 실측 버그였다."""
     a = f"{IN}/{out}_grade.json"
     if not os.path.exists(a):
-        util("anchor", "--src", f"{CIN}/{os.path.basename(start_png)}", "--dst", f"{CIN}/{out}_grade.json")
+        if not os.path.exists(f"{IN}/{start_name}"):
+            sys.exit(f"★톤 기준 이미지가 IN 에 없다: {start_name} — stage() 를 거친 이름을 넘길 것")
+        util("anchor", "--src", f"{CIN}/{start_name}", "--dst", f"{CIN}/{out}_grade.json")
     return f"{CIN}/{out}_grade.json"
 
 
@@ -410,12 +416,11 @@ def cmd_chunk(a):
         sys.exit(f"★행 {a.n} 은 이 설정의 범위 밖이다 (샷 {len(cfg['shots'])}개)")
     w, h = cfg.get("w", 768), cfg.get("h", 1152)
 
-    first = fit(stage(a.first), w, h)
-    if a.blur_first:
-        first = blur(first, a.blur_first)         # 씬의 첫 조각만. 경계에는 걸지 않는다
+    staged_first = fit(stage(a.first), w, h)      # IN/ 안의 이름. 톤 기준은 **블러 전** 이것
+    first = blur(staged_first, a.blur_first) if a.blur_first else staged_first
     last = fit(stage(a.last), w, h) if a.last else None
 
-    anchor = anchor_for(cfg, a.out, a.anchor or a.first)
+    anchor = anchor_for(cfg, a.out, stage(a.anchor) if a.anchor else staged_first)
     if a.force and chunk_path(a.out, i):
         os.replace(chunk_path(a.out, i), f"{OUT}/{a.out}_c{i}_prev_{int(time.time())}.mp4")
     if chunk_path(a.out, i) and not a.force:
